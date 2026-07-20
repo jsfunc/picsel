@@ -53,6 +53,27 @@ source .venv/bin/activate
 python -m pytest
 ```
 
+## Standalone executables
+
+Pushing a tag like `v1.0.0` triggers [.github/workflows/release.yml](.github/workflows/release.yml),
+which builds a standalone executable for Linux, Windows, and macOS (Apple
+Silicon) with [PyInstaller](https://pyinstaller.org/) and attaches them to a
+GitHub Release. You can also run the workflow manually from the Actions tab.
+
+These are unsigned builds, so Windows SmartScreen and macOS Gatekeeper will
+warn on first run; you'll need to explicitly allow the app to run.
+
+To build one locally instead:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pyinstaller picsel.spec
+```
+
+The executable is written to `dist/picSel` (`dist/picSel.exe` on Windows).
+PyInstaller doesn't cross-compile, so this must be run on each target OS.
+
 ## License
 
 GPLv3 — see [LICENSE](LICENSE). Copyright (C) 2026 jsfunc.
