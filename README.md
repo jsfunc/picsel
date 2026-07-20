@@ -52,3 +52,7 @@ See Help > Keyboard Shortcuts inside the app for the full shortcut list
 source .venv/bin/activate
 python -m pytest
 ```
+
+## License
+
+GPLv3 — see [LICENSE](LICENSE). Copyright (C) 2026 jsfunc.
