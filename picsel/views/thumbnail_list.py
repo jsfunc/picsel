@@ -1,0 +1,110 @@
+"""Horizontal filmstrip of thumbnails with async loading and status badges."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import QSize, Qt, QThreadPool
+from PySide6.QtGui import QColor, QFontMetrics, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
+
+from picsel.models.image_item import ImageItem, Status
+from picsel.thumbnails import ThumbnailWorker
+
+SELECTED_BG = QColor(46, 125, 50, 120)
+REJECTED_BG = QColor(125, 46, 46, 120)
+NEUTRAL_BG = QColor(0, 0, 0, 0)
+
+ICON_SIZE = QSize(120, 120)
+
+
+class ThumbnailList(QListWidget):
+    """Single-row filmstrip; `currentRowChanged` reflects the selected image's index."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setViewMode(QListWidget.ViewMode.IconMode)
+        self.setFlow(QListWidget.Flow.LeftToRight)
+        self.setWrapping(False)
+        self.setMovement(QListWidget.Movement.Static)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setIconSize(ICON_SIZE)
+        # Thumbnails load asynchronously, so an item's size hint changes once its icon
+        # arrives (no icon -> icon). setUniformItemSizes(True) would cache the smaller
+        # pre-icon layout rect and never grow it, squashing the thumbnail into a sliver.
+        self.setUniformItemSizes(False)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Item text can span two lines (filename + star rating); size the grid and
+        # the widget's height around that so items aren't clipped at the bottom.
+        line_height = QFontMetrics(self.font()).height()
+        item_size = QSize(ICON_SIZE.width() + 20, ICON_SIZE.height() + 2 * line_height + 12)
+        self.setGridSize(item_size)
+        scrollbar_height = self.horizontalScrollBar().sizeHint().height()
+        self.setFixedHeight(item_size.height() + scrollbar_height + 2 * self.frameWidth() + 4)
+
+        self._thread_pool = QThreadPool.globalInstance()
+        self._pending_workers: list[ThumbnailWorker] = []
+        self._generation = 0
+
+    def set_items(self, items: list[ImageItem]) -> None:
+        self._generation += 1
+        generation = self._generation
+        # Don't clear _pending_workers here: workers from the previous folder may
+        # still be running on the thread pool. Dropping their only Python reference
+        # would let their `signals` QObject get collected mid-flight, crashing the
+        # worker thread when it later tries to emit. Stale results are already
+        # discarded by the generation check in _on_thumbnail_ready, which also
+        # removes each worker from this list once it actually completes.
+        self.clear()
+        for item in items:
+            list_item = QListWidgetItem(item.name)
+            list_item.setData(Qt.ItemDataRole.UserRole, item)
+            list_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.addItem(list_item)
+            self._request_thumbnail(list_item, item, generation)
+        self.refresh_badges()
+
+    def _request_thumbnail(self, list_item: QListWidgetItem, item: ImageItem, generation: int) -> None:
+        worker = ThumbnailWorker(item.path)
+        self._pending_workers.append(worker)
+        worker.signals.finished.connect(
+            lambda path, image, error, li=list_item, w=worker, gen=generation: self._on_thumbnail_ready(
+                li, image, error, w, gen
+            )
+        )
+        self._thread_pool.start(worker)
+
+    def _on_thumbnail_ready(
+        self, list_item: QListWidgetItem, image: QImage, error: str, worker: ThumbnailWorker, generation: int
+    ) -> None:
+        if worker in self._pending_workers:
+            self._pending_workers.remove(worker)
+        if generation != self._generation:
+            return
+        if image.isNull():
+            list_item.setToolTip(f"Failed to load thumbnail: {error}" if error else "Failed to load thumbnail")
+            return
+        list_item.setIcon(QIcon(QPixmap.fromImage(image)))
+
+    def refresh_badges(self) -> None:
+        for i in range(self.count()):
+            list_item = self.item(i)
+            img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
+            label = img_item.name
+            if img_item.rating:
+                label += "\n" + "★" * img_item.rating
+            list_item.setText(label)
+            if img_item.status is Status.SELECTED:
+                list_item.setBackground(SELECTED_BG)
+            elif img_item.status is Status.REJECTED:
+                list_item.setBackground(REJECTED_BG)
+            else:
+                list_item.setBackground(NEUTRAL_BG)
+
+    def select_index(self, index: int) -> None:
+        if 0 <= index < self.count() and self.currentRow() != index:
+            self.blockSignals(True)
+            self.setCurrentRow(index)
+            self.blockSignals(False)
+        if 0 <= index < self.count():
+            self.scrollToItem(self.item(index), QAbstractItemView.ScrollHint.EnsureVisible)
