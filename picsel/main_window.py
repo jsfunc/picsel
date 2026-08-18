@@ -849,11 +849,23 @@ class MainWindow(QMainWindow):
 
         if mode == "move":
             folder = self.library.folder
+            previous_name = self.library.current_item.name if self.library.current_item else None
+            previous_index = self.library.current_index
             self.edit_session = None
             self.library.load(folder)
+            if self._sort_mode != "name" and self.library.items:
+                self.library.sort_items(key=self._sort_key(self._sort_mode))
             self.thumbnail_list.set_items(self.library.items)
             if self.library.items:
-                self.library.current_index = min(self.library.current_index, len(self.library.items) - 1)
+                # The previously current item may itself have been moved out by
+                # this culling pass, so it won't be found by name; fall back to
+                # the closest valid index to where it used to be.
+                match = next(
+                    (i for i, item in enumerate(self.library.items) if item.name == previous_name), None
+                )
+                self.library.current_index = (
+                    match if match is not None else min(previous_index, len(self.library.items) - 1)
+                )
                 self._show_current()
             else:
                 self.viewer.set_image(QImage())

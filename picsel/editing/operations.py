@@ -171,7 +171,10 @@ class EditSession:
         save_kwargs = {}
         if path.suffix.lower() in (".jpg", ".jpeg"):
             save_kwargs["quality"] = 95
-        exif = image.info.get("exif")
+        # Read exif from `_original`, not the rendered image: ImageEnhance (used for
+        # brightness/contrast/saturation) drops `.info` entirely, so a rendered image
+        # that went through an adjustment would otherwise report no exif at all.
+        exif = self._original.info.get("exif")
         if exif:
             save_kwargs["exif"] = exif
         image.save(path, **save_kwargs)

@@ -84,6 +84,26 @@ def test_save_preserves_exif(tmp_path):
     assert saved_exif.get(0x9003) == "2020:01:01 12:00:00"
 
 
+def test_save_preserves_exif_after_adjustments(tmp_path):
+    # ImageEnhance (used for brightness/contrast/saturation) drops PIL's `.info`
+    # dict entirely, so exif must be read from the original image, not the
+    # rendered one, or an adjusted save silently loses all EXIF data.
+    path = tmp_path / "photo.jpg"
+    image = Image.new("RGB", (4, 4), (10, 20, 30))
+    exif = Image.Exif()
+    exif[0x9003] = "2020:01:01 12:00:00"  # DateTimeOriginal
+    image.save(path, exif=exif.tobytes())
+
+    session = EditSession.from_path(path)
+    session.set_adjustments(brightness=1.2, contrast=1.0, saturation=1.0)
+    session.commit_adjustments()
+    saved_path = session.save(overwrite=False)
+
+    with Image.open(saved_path) as saved:
+        saved_exif = saved.getexif()
+    assert saved_exif.get(0x9003) == "2020:01:01 12:00:00"
+
+
 def test_save_copy_does_not_overwrite_original(tmp_path):
     session, path = _make_session(tmp_path)
     session.rotate()
