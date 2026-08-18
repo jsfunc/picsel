@@ -1,6 +1,6 @@
 # picSel
 
-picSel is a desktop app for quickly culling and lightly editing a folder of
+picSel is a small desktop app for quickly culling and lightly editing a folder of
 photos: browse a shoot, mark shots as selected/rejected, star-rate them, crop
 or rotate the keepers, and sort the results into folders — all from the
 keyboard, without leaving a single window.
