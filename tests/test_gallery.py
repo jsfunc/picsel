@@ -1,0 +1,365 @@
+import pytest
+
+np = pytest.importorskip("numpy")  # PersonGallery only needs numpy, but keep it optional like the rest of recognition
+
+from picsel.recognition.gallery import PersonGallery  # noqa: E402
+
+
+def _empty_gallery(tmp_path):
+    return PersonGallery(path=tmp_path / "people.json")
+
+
+def test_add_person_and_identify_a_close_embedding(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    base = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    gallery.add_embedding(person.id, base)
+
+    close = base + np.random.default_rng(1).normal(scale=0.01, size=512).astype(np.float32)
+    ranked = gallery.identify(close)
+
+    assert len(ranked) == 1
+    matched_person, similarity = ranked[0]
+    assert matched_person.id == person.id
+    assert similarity > 0.9
+
+
+def test_identify_returns_empty_for_empty_gallery(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    assert gallery.identify(embedding) == []
+
+
+def test_identify_ranks_k_nearest_distinct_people_most_similar_first(tmp_path):
+    # Alice contributes 2 of the 5 nearest samples (both very close to the
+    # query), Bob/Carol/Dave contribute one increasingly-distant sample each
+    # -- together exactly the k=5 nearest of 6 total samples. Eve's sample is
+    # the least similar of all and should be excluded entirely by k=5, even
+    # though her people-count (1 person) would otherwise fit.
+    gallery = _empty_gallery(tmp_path)
+    rng = np.random.default_rng(0)
+    query = rng.normal(size=512).astype(np.float32)
+
+    def offset_sample(scale):
+        return query + rng.normal(scale=scale, size=512).astype(np.float32)
+
+    alice = gallery.add_person("Alice")
+    gallery.add_embedding(alice.id, offset_sample(0.01))
+    gallery.add_embedding(alice.id, offset_sample(0.02))
+
+    bob = gallery.add_person("Bob")
+    gallery.add_embedding(bob.id, offset_sample(0.1))
+
+    carol = gallery.add_person("Carol")
+    gallery.add_embedding(carol.id, offset_sample(0.3))
+
+    dave = gallery.add_person("Dave")
+    gallery.add_embedding(dave.id, offset_sample(0.6))
+
+    eve = gallery.add_person("Eve")
+    gallery.add_embedding(eve.id, offset_sample(3.0))
+
+    ranked = gallery.identify(query, k=5)
+
+    names = [person.name for person, _ in ranked]
+    assert names == ["Alice", "Bob", "Carol", "Dave"]  # Alice once, despite 2 samples in the top-5
+    assert "Eve" not in names  # her sample wasn't among the k=5 nearest
+    similarities = [similarity for _, similarity in ranked]
+    assert similarities == sorted(similarities, reverse=True)
+
+
+def test_identify_k_limits_how_many_samples_are_considered(tmp_path):
+    # Alice's sample is the single closest; with k=1, only that one sample is
+    # examined, so Bob (a decent but not-nearest match) never gets a chance.
+    gallery = _empty_gallery(tmp_path)
+    rng = np.random.default_rng(0)
+    query = rng.normal(size=512).astype(np.float32)
+
+    alice = gallery.add_person("Alice")
+    gallery.add_embedding(alice.id, query + rng.normal(scale=0.01, size=512).astype(np.float32))
+
+    bob = gallery.add_person("Bob")
+    gallery.add_embedding(bob.id, query + rng.normal(scale=0.3, size=512).astype(np.float32))
+
+    ranked = gallery.identify(query, k=1)
+
+    assert [person.name for person, _ in ranked] == ["Alice"]
+
+
+def test_identify_has_no_similarity_floor(tmp_path):
+    # No min_similarity parameter exists anymore -- a genuinely unrelated
+    # person still comes back (as long as they fit within k), just with a
+    # low score. Callers convey confidence via that score (e.g. color), not
+    # by asking identify() to hide poor matches.
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    rng = np.random.default_rng(0)
+    gallery.add_embedding(person.id, rng.normal(size=512).astype(np.float32))
+
+    unrelated = rng.normal(size=512).astype(np.float32)
+    ranked = gallery.identify(unrelated)
+
+    assert len(ranked) == 1
+    assert ranked[0][0].id == person.id
+
+
+def test_add_embedding_to_unknown_person_raises(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    with pytest.raises(ValueError):
+        gallery.add_embedding("no-such-id", np.zeros(512, dtype=np.float32))
+
+
+def test_save_and_load_roundtrip(tmp_path):
+    path = tmp_path / "people.json"
+    gallery = PersonGallery(path=path)
+    person = gallery.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    gallery.add_embedding(person.id, embedding)
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+
+    assert len(reloaded.people) == 1
+    assert reloaded.people[0].name == "Alice"
+    assert reloaded.people[0].id == person.id
+    assert len(reloaded.people[0].embeddings) == 1
+    assert np.allclose(reloaded.people[0].embeddings[0], embedding, atol=1e-6)
+
+
+def test_load_missing_file_starts_empty(tmp_path):
+    gallery = PersonGallery(path=tmp_path / "does_not_exist.json")
+    assert gallery.people == []
+
+
+def test_remove_person(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    gallery.remove_person(person.id)
+    assert gallery.people == []
+
+
+def test_rank_all_includes_everyone_regardless_of_similarity_or_k(tmp_path):
+    # Unlike identify(), rank_all() has no threshold or k cutoff: even a
+    # near-opposite match should still appear, just ranked last.
+    gallery = _empty_gallery(tmp_path)
+    rng = np.random.default_rng(0)
+    query = rng.normal(size=512).astype(np.float32)
+
+    close = gallery.add_person("Close")
+    gallery.add_embedding(close.id, query + rng.normal(scale=0.01, size=512).astype(np.float32))
+
+    far = gallery.add_person("Far")
+    gallery.add_embedding(far.id, -query)  # deliberately near-opposite
+
+    ranked = gallery.rank_all(query)
+
+    assert [person.name for person, _ in ranked] == ["Close", "Far"]
+    similarities = [similarity for _, similarity in ranked]
+    assert similarities == sorted(similarities, reverse=True)
+
+
+def test_rank_all_excludes_people_with_no_embeddings(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    gallery.add_person("NoSamplesYet")
+    query = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    assert gallery.rank_all(query) == []
+
+
+def test_remove_embedding_removes_the_matching_sample(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    rng = np.random.default_rng(0)
+    kept = rng.normal(size=512).astype(np.float32)
+    removed = rng.normal(size=512).astype(np.float32)
+    gallery.add_embedding(person.id, kept)
+    gallery.add_embedding(person.id, removed)
+
+    result = gallery.remove_embedding(person.id, removed)
+
+    assert result is True
+    assert len(person.embeddings) == 1
+    assert np.allclose(person.embeddings[0], kept)
+
+
+def test_remove_embedding_deletes_person_left_with_zero_samples(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    gallery.add_embedding(person.id, embedding)
+
+    result = gallery.remove_embedding(person.id, embedding)
+
+    assert result is True
+    assert gallery.find_by_id(person.id) is None
+    assert gallery.people == []
+
+
+def test_remove_embedding_matches_by_value_not_identity(tmp_path):
+    # A reloaded-from-JSON array is never the same object as the one that was
+    # originally added -- matching must be by value.
+    path = tmp_path / "people.json"
+    gallery = PersonGallery(path=path)
+    person = gallery.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    gallery.add_embedding(person.id, embedding)
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+    reloaded_person = reloaded.people[0]
+    same_value_different_object = np.array(embedding, dtype=np.float32, copy=True)
+
+    assert reloaded.remove_embedding(reloaded_person.id, same_value_different_object) is True
+    assert reloaded_person.embeddings == []
+
+
+def test_remove_embedding_returns_false_when_not_found(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    unrelated = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    assert gallery.remove_embedding(person.id, unrelated) is False
+    assert gallery.remove_embedding("no-such-id", unrelated) is False
+
+
+def test_merge_combines_embeddings_and_removes_the_source(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    rng = np.random.default_rng(0)
+    lowercase = gallery.add_person("papa")
+    gallery.add_embedding(lowercase.id, rng.normal(size=512).astype(np.float32))
+    capitalized = gallery.add_person("Papa")
+    gallery.add_embedding(capitalized.id, rng.normal(size=512).astype(np.float32))
+    gallery.add_embedding(capitalized.id, rng.normal(size=512).astype(np.float32))
+
+    gallery.merge(keep_id=capitalized.id, remove_id=lowercase.id)
+
+    assert gallery.find_by_id(lowercase.id) is None
+    kept = gallery.find_by_id(capitalized.id)
+    assert kept.name == "Papa"
+    assert len(kept.embeddings) == 3
+
+
+def test_merge_into_self_raises(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    with pytest.raises(ValueError):
+        gallery.merge(keep_id=person.id, remove_id=person.id)
+
+
+def test_merge_unknown_id_raises(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    with pytest.raises(ValueError):
+        gallery.merge(keep_id=person.id, remove_id="no-such-id")
+
+
+def test_save_writes_gzip_compressed_json(tmp_path):
+    import gzip
+    import json
+
+    path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=path)
+    person = gallery.add_person("Alice")
+    gallery.add_embedding(person.id, np.zeros(512, dtype=np.float32))
+    gallery.save()
+
+    raw = path.read_bytes()
+    with pytest.raises((json.JSONDecodeError, UnicodeDecodeError)):
+        json.loads(raw)  # not readable as plain JSON -- proves it's actually compressed
+    decompressed = json.loads(gzip.decompress(raw))
+    assert decompressed["people"][0]["name"] == "Alice"
+
+
+def test_load_migrates_from_legacy_uncompressed_file_without_deleting_it(tmp_path):
+    import json
+
+    legacy_path = tmp_path / "people.json"
+    legacy_path.write_text(json.dumps({"people": [{"id": "abc123", "name": "Alice", "embeddings": [[0.0] * 512]}]}))
+
+    gz_path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=gz_path)
+
+    assert [p.name for p in gallery.people] == ["Alice"]
+    assert not gz_path.exists()  # nothing written yet, this was a read-only migration check
+
+    gallery.save()
+
+    assert gz_path.exists()
+    assert legacy_path.exists()  # left in place, not deleted
+
+    reloaded = PersonGallery(path=gz_path)
+    assert [p.name for p in reloaded.people] == ["Alice"]
+
+
+def test_export_then_import_into_a_fresh_gallery(tmp_path):
+    source = _empty_gallery(tmp_path)
+    person = source.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    source.add_embedding(person.id, embedding)
+
+    export_path = tmp_path / "exported.json.gz"
+    source.export_to(export_path)
+
+    destination = PersonGallery(path=tmp_path / "other" / "people.json.gz")
+    added = destination.import_from(export_path)
+
+    assert added == 1
+    assert len(destination.people) == 1
+    imported_person = destination.people[0]
+    assert imported_person.name == "Alice"
+    assert imported_person.id != person.id  # never reuses the source's id
+    assert np.allclose(imported_person.embeddings[0], embedding)
+
+
+def test_import_merges_into_existing_person_with_the_same_name(tmp_path):
+    source = _empty_gallery(tmp_path)
+    source_person = source.add_person("Alice")
+    source.add_embedding(source_person.id, np.random.default_rng(0).normal(size=512).astype(np.float32))
+    export_path = tmp_path / "exported.json.gz"
+    source.export_to(export_path)
+
+    destination = _empty_gallery(tmp_path)
+    existing = destination.add_person("Alice")
+    destination.add_embedding(existing.id, np.random.default_rng(1).normal(size=512).astype(np.float32))
+
+    added = destination.import_from(export_path)
+
+    assert added == 0  # merged into the existing "Alice", not added as new
+    assert len(destination.people) == 1
+    assert len(destination.people[0].embeddings) == 2
+
+
+def test_import_accepts_plain_uncompressed_json(tmp_path):
+    import json
+
+    plain_path = tmp_path / "plain_export.json"
+    plain_path.write_text(json.dumps({"people": [{"id": "x", "name": "Bob", "embeddings": [[0.0] * 512]}]}))
+
+    destination = _empty_gallery(tmp_path)
+    added = destination.import_from(plain_path)
+
+    assert added == 1
+    assert destination.people[0].name == "Bob"
+
+
+def test_similarity_to_matches_the_closest_sample(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    rng = np.random.default_rng(0)
+    base = rng.normal(size=512).astype(np.float32)
+    gallery.add_embedding(person.id, rng.normal(size=512).astype(np.float32))  # unrelated, far sample
+    gallery.add_embedding(person.id, base)  # the close one
+
+    close = base + rng.normal(scale=0.01, size=512).astype(np.float32)
+    assert gallery.similarity_to(person.id, close) > 0.9
+
+
+def test_similarity_to_unknown_person_is_zero(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    assert gallery.similarity_to("no-such-id", embedding) == 0.0
+
+
+def test_similarity_to_person_with_no_samples_is_zero(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("NoSamplesYet")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    assert gallery.similarity_to(person.id, embedding) == 0.0

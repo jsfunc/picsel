@@ -1,0 +1,15 @@
+-r requirements.txt
+
+# Face recognition (optional): detection + embedding backbone.
+#
+# Default install (this file as-is) pulls the standard PyPI wheels, which
+# bundle CUDA support and will use an NVIDIA GPU automatically if present
+# (`torch.cuda.is_available()`), falling back to CPU otherwise.
+#
+# On a machine with no NVIDIA GPU, installing this way still works but wastes
+# ~2GB downloading unused CUDA libraries. Avoid that with the CPU-only wheel
+# index instead:
+#   pip install --index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
+torch>=2.2
+torchvision>=0.17
+facenet-pytorch>=2.5

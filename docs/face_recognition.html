@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>picSel — Face Detection &amp; Recognition</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #1c1e21;
+    --muted: #5b6270;
+    --border: #e3e5e8;
+    --accent: #2f6feb;
+    --code-bg: #f4f5f7;
+    --card-bg: #f9fafb;
+    --green: #1f8b4c;
+    --red: #c23b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --text: #e7e9ec;
+      --muted: #9aa1ab;
+      --border: #2a2d33;
+      --accent: #6ea1ff;
+      --code-bg: #1d2024;
+      --card-bg: #1a1d21;
+      --green: #4cbf7f;
+      --red: #e07272;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 1.5rem 4rem;
+  }
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  header.hero {
+    padding: 3rem 0 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header.hero h1 {
+    font-size: 1.9rem;
+    margin: 0 0 0.4rem;
+  }
+  header.hero p.subtitle {
+    color: var(--muted);
+    font-size: 1.05rem;
+    margin: 0;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin-top: 3rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.1rem;
+    margin-top: 2rem;
+  }
+  p, li { color: var(--text); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin: 1.25rem 0;
+  }
+  .card h4 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.25rem 0;
+    font-size: 0.95rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { color: var(--muted); font-weight: 600; }
+  .pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin: 1.5rem 0;
+  }
+  .pipeline .step {
+    flex: 1 1 140px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 0.85rem;
+    font-size: 0.9rem;
+  }
+  .pipeline .step .n {
+    display: inline-block;
+    width: 1.4em; height: 1.4em;
+    line-height: 1.4em;
+    text-align: center;
+    border-radius: 50%;
+    background: var(--accent);
+    color: white;
+    font-size: 0.75rem;
+    margin-right: 0.4rem;
+  }
+  .toc {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+  .toc h4 { margin-top: 0; color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .toc ol { margin: 0.3rem 0 0; padding-left: 1.2rem; }
+  .toc li { margin: 0.2rem 0; }
+  .badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 0.1em 0.55em;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin-left: 0.4em;
+  }
+  .file-path { color: var(--muted); }
+  .swatch {
+    display: inline-block;
+    width: 0.8em; height: 0.8em;
+    border-radius: 2px;
+    margin-right: 0.35em;
+    vertical-align: middle;
+  }
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="hero">
+  <h1>Face Detection &amp; Recognition in picSel</h1>
+  <p class="subtitle">How picSel finds faces in your photos and learns to recognize who's in them — the tools, the architectures behind them, and where the design choices came from.</p>
+</header>
+
+<div class="toc">
+  <h4>Contents</h4>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#detection">Face detection — MTCNN</a></li>
+    <li><a href="#embedding">Face embedding — InceptionResnetV1</a></li>
+    <li><a href="#identity">Identity matching — an open-set gallery, not a classifier</a></li>
+    <li><a href="#storage">Where everything is stored</a></li>
+    <li><a href="#hardware">Hardware &amp; performance</a></li>
+    <li><a href="#tuning">Why there's no fixed "recognized" threshold</a></li>
+    <li><a href="#future">What's not built yet</a></li>
+    <li><a href="#reading">Further reading</a></li>
+  </ol>
+</div>
+
+<h2 id="overview">Overview</h2>
+<p>
+  Recognizing "who is in this photo" is really two separate machine-learning problems bolted together, plus a bookkeeping layer that has nothing to do with ML at all:
+</p>
+<div class="pipeline">
+  <div class="step"><span class="n">1</span><strong>Detect</strong><br>find every face's bounding box in a photo</div>
+  <div class="step"><span class="n">2</span><strong>Embed</strong><br>turn each face into a 512-number fingerprint</div>
+  <div class="step"><span class="n">3</span><strong>Match</strong><br>compare that fingerprint against people you've already named</div>
+  <div class="step"><span class="n">4</span><strong>Remember</strong><br>save the fingerprint under that name for next time</div>
+</div>
+<p>
+  picSel runs entirely on your own machine using <a href="https://pytorch.org">PyTorch</a> — no photo or face data is ever sent anywhere. Detection and embedding both come from the
+  <a href="https://github.com/timesler/facenet-pytorch"><code>facenet-pytorch</code></a> library, which packages two well-established, pretrained neural networks behind a simple API. picSel doesn't train either of those networks from scratch — it uses them exactly as published, and instead does its own lightweight, growable bookkeeping on top (the "gallery" of known people), described in <a href="#identity">Identity matching</a> below.
+</p>
+
+<h2 id="detection">Face detection — MTCNN</h2>
+<p>
+  Finding faces in an arbitrary photo — as opposed to identifying <em>whose</em> faces they are — is a generic, well-solved computer vision problem. picSel uses <strong>MTCNN</strong> (Multi-task Cascaded Convolutional Networks), a detector published in 2016 that's still a common, lightweight default choice for this exact task.
+</p>
+<div class="card">
+  <h4>Architecture</h4>
+  <p>
+    MTCNN is a <em>cascade</em> of three small convolutional networks that run in sequence, each one refining the previous stage's guesses and discarding unlikely ones:
+  </p>
+  <ul>
+    <li><strong>P-Net</strong> (Proposal Network) — scans the image at multiple scales and proposes a large number of rough candidate windows very cheaply.</li>
+    <li><strong>R-Net</strong> (Refine Network) — takes P-Net's candidates, rejects most of them, and tightens the bounding boxes of what's left.</li>
+    <li><strong>O-Net</strong> (Output Network) — the final, most expensive stage; produces the precise face box plus 5 facial landmark points (eyes, nose, mouth corners) and a final confidence score.</li>
+  </ul>
+  <p>Each stage only has to look closely at what the previous stage already thinks is plausible, which is what makes the whole cascade fast despite being three networks deep.</p>
+</div>
+<p>
+  picSel's wrapper lives in <code class="file-path">picsel/recognition/detector.py</code>. Two implementation choices are worth calling out, because they came from bugs found while testing on real photos rather than from the library's defaults:
+</p>
+<ul>
+  <li>
+    <strong>Full resolution, not a downscaled copy.</strong> Detection originally ran on a photo resized to 1600px for speed, but that put detected boxes in a different coordinate space than what's actually displayed and cropped elsewhere in the app — a downscaled detection pass would silently misplace box overlays (and any manually-drawn "add a face here" box). Detection now runs on exactly the same full-resolution image the rest of the app uses, at a real but acceptable cost (a few hundred milliseconds per photo on a modern GPU).
+  </li>
+  <li>
+    <strong>A loosened cascade, with confidence exposed rather than filtered.</strong> MTCNN's default thresholds (<code>[0.6, 0.7, 0.7]</code>) reject a candidate outright at any stage — which turned out to silently drop a real, partially-occluded face (sunglasses + a cap) that only scored 0.698 on a full re-run. picSel loosens the cascade (<code>[0.5, 0.5, 0.3]</code>) so every candidate reaches a final score instead of being discarded mid-pipeline, and returns <em>all</em> of them unfiltered. The confidence threshold shown in the app's Faces panel is then a pure, free filter over that already-computed list — moving the slider never re-runs detection.
+  </li>
+</ul>
+<p>
+  That confidence number isn't a clean "face vs. not a face" signal, either: testing on real photos found a dry, curled leaf scoring 0.974 (higher than some genuine faces), while backgrounds like stone-wall texture or a chin/neck fold under harsh light occasionally score in the 0.7–0.9 range. That's exactly why the confidence threshold is a slider rather than a hardcoded cutoff, and why the Faces panel also offers manual "add a face here" / "no face here" overrides for whatever the threshold alone can't get right.
+</p>
+
+<h2 id="embedding">Face embedding — InceptionResnetV1</h2>
+<p>
+  Once a face's box is known, the next question — <em>whose</em> face is it — is answered by turning the cropped face into a fixed-length vector of 512 numbers (an <strong>embedding</strong>), computed so that the same person's faces land close together in that 512-dimensional space, and different people land far apart, regardless of lighting, angle, or expression.
+</p>
+<div class="card">
+  <h4>Architecture</h4>
+  <p>
+    The backbone is <strong>InceptionResnetV1</strong>, a convolutional network that combines two ideas from mid-2010s computer vision architecture research:
+  </p>
+  <ul>
+    <li><strong>Inception modules</strong> — instead of picking one convolution filter size per layer, run several sizes in parallel (and a pooling branch) and concatenate the results, so the network can capture detail at multiple scales at once.</li>
+    <li><strong>Residual ("ResNet") connections</strong> — each block adds its input back to its output, which lets gradients flow through very deep networks during training without vanishing, and is what makes the "Resnet" half of the name possible at this depth.</li>
+  </ul>
+  <p>
+    picSel uses the <code>facenet-pytorch</code> build of this network, pretrained on <strong>VGGFace2</strong> — a public dataset of about 3.3 million face photos across roughly 9,000 identities, deliberately varied in pose, age, and lighting so the resulting embedding space generalizes to faces it has never seen. picSel never trains this network itself; it's used exactly as published (transfer learning, not fine-tuning — see <a href="#future">What's not built yet</a>).
+  </p>
+</div>
+<p>
+  In <code class="file-path">picsel/recognition/embedder.py</code>, each detected face is cropped (with a small margin) and normalized using <code>facenet-pytorch</code>'s own <code>extract_face</code>/<code>fixed_image_standardization</code> helpers — reused rather than reimplemented, since getting the exact preprocessing a pretrained model expects right by hand is an easy way to silently degrade its accuracy. The output is one 512-float vector per face, computed once per face and cached (see <a href="#storage">Where everything is stored</a>) rather than recomputed every time a photo is viewed.
+</p>
+
+<h2 id="identity">Identity matching — an open-set gallery, not a classifier</h2>
+<p>
+  A conventional face-recognition classifier has one output per known person, which means adding someone new means resizing and retraining that output layer. picSel avoids that entirely: a person's identity is just a <em>growable list of embedding samples</em> (<code class="file-path">picsel/recognition/gallery.py</code>, class <code>PersonGallery</code>). Labeling a face adds one more sample to that list — no retraining, ever, no matter how many people you add.
+</p>
+<p>Matching a new face against the gallery is <strong>k-nearest-neighbors</strong> in embedding space, using <a href="https://en.wikipedia.org/wiki/Cosine_similarity">cosine similarity</a> as the distance metric:</p>
+<ul>
+  <li><code>identify(embedding)</code> pools the <code>k</code> nearest individual samples across <em>every</em> person's samples together, then collapses that pool down to the distinct people represented — so one person with many closely-clustered samples can't crowd out a real second candidate the way naively taking the single best match per person can.</li>
+  <li><code>rank_all(embedding)</code> scores literally everyone in the gallery (by their own single closest sample), with no cutoff at all — this is what powers the "pick from everyone" dropdown, as opposed to <code>identify()</code>'s tighter best-guess shortlist.</li>
+</ul>
+<p>
+  Confirming a name does two things at once: it links that specific face (in that specific photo) to a person via a <code>person_id</code>, <em>and</em> it appends that face's embedding to the person's sample list — so the gallery keeps improving simply from normal use, without any separate training step.
+</p>
+
+<h2 id="storage">Where everything is stored</h2>
+<table>
+  <tr><th>What</th><th>Where</th><th>Scope</th></tr>
+  <tr>
+    <td>Known people + their reference embeddings</td>
+    <td><code>~/.picsel/people.json.gz</code></td>
+    <td>One file, shared across your whole photo library</td>
+  </tr>
+  <tr>
+    <td>Detected/labeled faces per photo</td>
+    <td><code>&lt;folder&gt;/.picsel_faces.json</code></td>
+    <td>One file per photo folder, next to the photos (mirrors the existing <code>.picsel_state.json</code> convention used for culling/ratings)</td>
+  </tr>
+</table>
+<p>
+  The split matters: the central gallery file is each person's durable "memory," while the per-folder file is what links a specific face in a specific photo back to that memory. It's also why deleting a folder's cache only breaks those links (a face reverts to "suggested, not confirmed" — annoying, but recoverable by re-confirming) rather than losing who anyone actually is.
+</p>
+<p>
+  The gallery file is gzip-compressed, since each embedding is 512 floats and accumulates one sample per confirmed face — on a real library this shrank a roughly 2.3MB plain-JSON file to about 560KB. A gallery can also be exported to (and imported/merged back in from) an arbitrary file via <em>Manage People → Export/Import Gallery</em>, for backing up or moving your labeled identities to another machine.
+</p>
+
+<h2 id="hardware">Hardware &amp; performance</h2>
+<p>
+  Both networks run on whichever device PyTorch reports as available — an NVIDIA GPU via CUDA if present, otherwise the CPU, chosen automatically at import time (<code>picsel/recognition/detector.py</code>: <code>DEVICE = "cuda" if torch.cuda.is_available() else "cpu"</code>). No configuration is needed either way.
+</p>
+<p>
+  On a modern GPU, detecting and embedding all the faces in a typical photo takes roughly 200–650ms depending on resolution and how many faces are present; on CPU it's slower but still workable, since it always runs on a background thread and never blocks the UI. The very first detection after starting the app can take noticeably longer on some GPUs while CUDA JIT-compiles kernels for that specific hardware — a one-time cost per app run, not per photo.
+</p>
+
+<h2 id="tuning">Why there's no fixed "recognized" threshold</h2>
+<p>
+  Both the detector's confidence and the gallery's similarity score are continuous numbers with no single cutoff that cleanly separates "yes" from "no" for every photo. Concretely, on real test photos:
+</p>
+<ul>
+  <li>A genuine match for the same person across two different photos scored as low as <strong>0.555</strong> similarity in one case and <strong>0.67</strong> in another — the same person, different lighting and angle.</li>
+  <li>Two different siblings in the <em>same</em> photo scored <strong>0.61</strong> against each other — higher than one of the genuine same-person matches above.</li>
+</ul>
+<p>
+  Because of that overlap, picSel doesn't hide a suggestion just because it's below some fixed number. Suggestions are always shown, colored on a continuous
+  <span class="swatch" style="background:#c23b3b"></span>red‑to‑<span class="swatch" style="background:#1f8b4c"></span>green scale by similarity, and left for you to judge — with a tunable similarity slider (in <em>Search by Name</em>) and confidence slider (in the Faces panel) for cases where you want to cast a wider or narrower net.
+</p>
+
+<h2 id="future">What's not built yet</h2>
+<p>
+  The identity gallery already improves from normal use — every confirmed label adds a sample — but the embedding network itself (InceptionResnetV1) is never fine-tuned on your own photos; it's used exactly as published on VGGFace2. A planned next step is a periodic background fine-tuning pass over your own accumulated labeled faces, so the embedding space itself gets sharper for the specific people in your library over time (e.g. better separating visually similar family members), rather than relying solely on accumulating more reference samples against a fixed, general-purpose embedding space.
+</p>
+
+<h2 id="reading">Further reading</h2>
+<ul>
+  <li><a href="https://github.com/timesler/facenet-pytorch">facenet-pytorch</a> — the PyTorch library providing both MTCNN and InceptionResnetV1, with pretrained weights.</li>
+  <li><a href="https://pytorch.org">PyTorch</a> — the underlying deep learning framework.</li>
+  <li>Zhang, Zhang, Li &amp; Qiao, <em>"Joint Face Detection and Alignment using Multi-task Cascaded Convolutional Networks"</em> (2016) — the original MTCNN paper.</li>
+  <li>Schroff, Kalenichenko &amp; Philbin, <em>"FaceNet: A Unified Embedding for Face Recognition and Clustering"</em> (2015) — introduced the embedding-space approach to face recognition that this whole design is built on.</li>
+  <li>Szegedy, Ioffe, Vanhoucke &amp; Alemi, <em>"Inception-v4, Inception-ResNet and the Impact of Residual Connections on Learning"</em> (2016) — the Inception-ResNet architecture family.</li>
+  <li>Cao, Shen, Xie, Parkhi &amp; Zisserman, <em>"VGGFace2: A Dataset for Recognising Faces across Pose and Age"</em> (2018) — the dataset the embedding backbone was pretrained on.</li>
+  <li><a href="https://en.wikipedia.org/wiki/Cosine_similarity">Cosine similarity</a> and <a href="https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm">k-nearest neighbors</a> — the two general techniques the identity-matching layer is built from.</li>
+</ul>
+
+<footer>
+  picSel is a local, offline photo culling and editing app — face recognition runs entirely on your own machine, and no photo or face data leaves it.
+</footer>
+
+</div>
+</body>
+</html>

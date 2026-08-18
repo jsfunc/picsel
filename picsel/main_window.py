@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThreadPool, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QShortcut
+from PySide6.QtCore import QRect, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDockWidget,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -22,8 +23,11 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSlider,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from picsel.editing import EditSession
@@ -42,6 +46,19 @@ from picsel.views.image_viewer import ImageViewer
 from picsel.views.metadata_panel import MetadataPanel
 from picsel.views.thumbnail_list import ThumbnailList
 
+# Face recognition depends on torch/facenet-pytorch, an optional heavy extra
+# (see requirements-recognition.txt) not installed by the base ./install.sh --
+# the whole feature degrades to "not available" rather than breaking the app
+# for anyone who hasn't opted into it.
+try:
+    from picsel.recognition import FaceCatalog, PersonGallery
+    from picsel.recognition.worker import FaceDetectionWorker, FolderSearchWorker
+    from picsel.views.face_panel import THUMBNAIL_SIZE, FaceEntry, FacePanel
+
+    RECOGNITION_AVAILABLE = True
+except ImportError:
+    RECOGNITION_AVAILABLE = False
+
 IMAGE_LOAD_PRIORITY = 10  # above the default (0) used by thumbnail workers
 
 SHORTCUTS_TEXT = """\
@@ -57,8 +74,8 @@ Culling
   0               Clear rating
 
 Editing
-  E               Toggle edit panel
-  M               Toggle metadata panel
+  E               Show Edit Image panel
+  M               Show Image Information panel
   R               Rotate clockwise
   Shift+R         Rotate counter-clockwise
   H               Flip horizontal
@@ -73,6 +90,12 @@ Library
   Ctrl+Shift+N    Renumber a sequence by creation time
   Ctrl+Shift+D    Rename all by creation date (pYYYYmmdd_hhmmss.ext)
 """
+
+if RECOGNITION_AVAILABLE:
+    SHORTCUTS_TEXT = SHORTCUTS_TEXT.replace(
+        "  M               Show Image Information panel\n",
+        "  M               Show Image Information panel\n  F               Show Face Recognition panel\n",
+    )
 
 
 class ApplyCullingDialog(QDialog):
@@ -203,6 +226,295 @@ class RenumberDialog(QDialog):
             self.accept()
 
 
+class ManagePeopleDialog(QDialog):
+    """Lists everyone in the PersonGallery; selecting two or more and merging
+    folds their embedding samples into one entry (e.g. to fix a duplicate
+    created by entering the same person's name with different capitalization).
+    """
+
+    def __init__(self, gallery, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Manage People")
+        self.gallery = gallery
+        # (removed_person_id, kept_person_id) for each merge done this session,
+        # so the caller can update any per-folder face records pointing at a
+        # now-gone person id.
+        self.merges: list[tuple[str, str]] = []
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            "Select one person to rename, or Ctrl/Shift-click two or more\n"
+            "and Merge Selected to combine them (e.g. \"papa\" and \"Papa\")."
+        ))
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._refresh_list()
+        layout.addWidget(self.list_widget)
+
+        actions_row = QHBoxLayout()
+        rename_button = QPushButton("Rename Selected")
+        rename_button.clicked.connect(self._on_rename_clicked)
+        actions_row.addWidget(rename_button)
+
+        merge_button = QPushButton("Merge Selected")
+        merge_button.clicked.connect(self._on_merge_clicked)
+        actions_row.addWidget(merge_button)
+        layout.addLayout(actions_row)
+
+        transfer_row = QHBoxLayout()
+        export_button = QPushButton("Export Gallery...")
+        export_button.clicked.connect(self._on_export_clicked)
+        transfer_row.addWidget(export_button)
+
+        import_button = QPushButton("Import Gallery...")
+        import_button.clicked.connect(self._on_import_clicked)
+        transfer_row.addWidget(import_button)
+        layout.addLayout(transfer_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _refresh_list(self) -> None:
+        self.list_widget.clear()
+        for person in sorted(self.gallery.people, key=lambda p: p.name.lower()):
+            sample_word = "sample" if len(person.embeddings) == 1 else "samples"
+            list_item = QListWidgetItem(f"{person.name}  ({len(person.embeddings)} {sample_word})")
+            list_item.setData(Qt.ItemDataRole.UserRole, person.id)
+            self.list_widget.addItem(list_item)
+
+    def _on_rename_clicked(self) -> None:
+        selected_ids = [item.data(Qt.ItemDataRole.UserRole) for item in self.list_widget.selectedItems()]
+        if len(selected_ids) != 1:
+            QMessageBox.information(self, "Rename Person", "Select exactly one person to rename.")
+            return
+
+        person = self.gallery.find_by_id(selected_ids[0])
+        name, ok = QInputDialog.getText(self, "Rename Person", "New name:", text=person.name)
+        if not ok or not name.strip():
+            return
+
+        person.name = name.strip()
+        self.gallery.save()
+        self._refresh_list()
+
+    def _on_merge_clicked(self) -> None:
+        selected_ids = [item.data(Qt.ItemDataRole.UserRole) for item in self.list_widget.selectedItems()]
+        if len(selected_ids) < 2:
+            QMessageBox.information(self, "Merge People", "Select two or more people to merge.")
+            return
+
+        default_name = self.gallery.find_by_id(selected_ids[0]).name
+        name, ok = QInputDialog.getText(self, "Merge People", "Name for the merged person:", text=default_name)
+        if not ok or not name.strip():
+            return
+
+        keep_id = selected_ids[0]
+        for remove_id in selected_ids[1:]:
+            self.gallery.merge(keep_id=keep_id, remove_id=remove_id)
+            self.merges.append((remove_id, keep_id))
+        self.gallery.find_by_id(keep_id).name = name.strip()
+        self.gallery.save()
+        self._refresh_list()
+
+    def _on_export_clicked(self) -> None:
+        if not self.gallery.people:
+            QMessageBox.information(self, "Export Gallery", "There's no one in the gallery yet to export.")
+            return
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "Export Gallery", "picsel_people.json.gz", "Compressed gallery (*.json.gz)"
+        )
+        if not chosen:
+            return
+        try:
+            self.gallery.export_to(Path(chosen))
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Failed", str(exc))
+            return
+        QMessageBox.information(
+            self, "Export Gallery", f"Exported {len(self.gallery.people)} people to {chosen}."
+        )
+
+    def _on_import_clicked(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Import Gallery", "", "Gallery files (*.json.gz *.json);;All Files (*)"
+        )
+        if not chosen:
+            return
+        try:
+            added = self.gallery.import_from(Path(chosen))
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
+            QMessageBox.critical(self, "Import Failed", f"Could not read {chosen}:\n{exc}")
+            return
+        self.gallery.save()
+        self._refresh_list()
+        QMessageBox.information(
+            self,
+            "Import Gallery",
+            f"Imported {added} new people. People already known by the same name had "
+            "the imported samples added to their existing entry instead of duplicating them.",
+        )
+
+
+class SearchPanel(QWidget):
+    """Scans every photo in the currently open folder for a named person.
+    Lives as a persistent "Search by Name" tab (not a one-shot dialog), so
+    results stay put after clicking through them. Confirmed occurrences
+    (already labeled) list first; unconfirmed-but-similar occurrences follow,
+    ranked by similarity, down to a tunable cutoff. A single click on a
+    result emits `photo_chosen` with its path -- the panel itself doesn't
+    know how to navigate the library, that's the owning window's job.
+    """
+
+    photo_chosen = Signal(Path)
+
+    def __init__(self, library, face_catalog, person_gallery, thread_pool, get_min_confidence, parent=None) -> None:
+        super().__init__(parent)
+        self.library = library
+        self.face_catalog = face_catalog
+        self.person_gallery = person_gallery
+        self.thread_pool = thread_pool
+        self.get_min_confidence = get_min_confidence
+        self._worker = None
+        self._hits: list = []
+        self._total_photos = 0
+        self._cancel_requested = False
+
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+        self.name_combo = QComboBox()
+        self.name_combo.setEditable(True)
+        form.addRow("Name", self.name_combo)
+        layout.addLayout(form)
+
+        self._similarity_label = QLabel()
+        layout.addWidget(self._similarity_label)
+        self.similarity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.similarity_slider.setRange(0, 100)
+        self.similarity_slider.setValue(50)
+        self.similarity_slider.valueChanged.connect(self._update_similarity_label)
+        self._update_similarity_label(self.similarity_slider.value())
+        layout.addWidget(self.similarity_slider)
+
+        search_row = QHBoxLayout()
+        self.search_button = QPushButton("Search")
+        self.search_button.clicked.connect(self._on_search_clicked)
+        search_row.addWidget(self.search_button)
+
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self._on_cancel_clicked)
+        search_row.addWidget(self.cancel_button)
+        layout.addLayout(search_row)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        self.results_list = QListWidget()
+        self.results_list.itemClicked.connect(self._on_item_clicked)
+        layout.addWidget(self.results_list)
+
+        self.refresh_people()
+
+    def refresh_people(self) -> None:
+        """Repopulate the name dropdown from the gallery's current people,
+        keeping whatever's currently typed/selected. Called when this tab
+        becomes active, since labeling elsewhere can add new people."""
+        current = self.name_combo.currentText()
+        self.name_combo.clear()
+        self.name_combo.addItems(sorted((p.name for p in self.person_gallery.people), key=str.lower))
+        self.name_combo.setCurrentText(current)
+
+    def _update_similarity_label(self, value: int) -> None:
+        self._similarity_label.setText(f"Minimum similarity for unconfirmed matches: {value / 100.0:.2f}")
+
+    def _on_search_clicked(self) -> None:
+        if self._worker is not None:
+            return  # a search is already running
+        name = self.name_combo.currentText().strip()
+        if not name:
+            return
+        person = self.person_gallery.find_by_name(name)
+        if person is None:
+            QMessageBox.information(self, "Search by Name", f'No one named "{name}" in the gallery yet.')
+            return
+        if not self.library.items:
+            return
+
+        self.results_list.clear()
+        self._hits = []
+        self._total_photos = len(self.library.items)
+        self._cancel_requested = False
+        self.status_label.setText(self._progress_text(done=0))
+        self.search_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        paths = [item.path for item in self.library.items]
+        worker = FolderSearchWorker(
+            self.face_catalog,
+            self.person_gallery,
+            person,
+            paths,
+            min_similarity=self.similarity_slider.value() / 100.0,
+            min_confidence=self.get_min_confidence(),
+        )
+        self._worker = worker  # keep alive until it finishes (same reasoning as other workers)
+        worker.signals.photo_processed.connect(self._on_photo_processed)
+        worker.signals.finished.connect(self._on_search_finished)
+        self.thread_pool.start(worker)
+
+    def _on_cancel_clicked(self) -> None:
+        if self._worker is None:
+            return
+        self._cancel_requested = True
+        self._worker.cancel()
+        self.cancel_button.setEnabled(False)  # takes effect after the in-flight photo finishes, not instantly
+
+    def _progress_text(self, done: int) -> str:
+        confirmed_count = sum(1 for hit in self._hits if hit.confirmed)
+        return (
+            f"Searching: {done}/{self._total_photos} photos processed, "
+            f"{len(self._hits)} found ({confirmed_count} confirmed)."
+        )
+
+    def _on_photo_processed(self, hits: list, done: int, total: int) -> None:
+        if hits:
+            self._hits.extend(hits)
+            self._render_results()
+        self.status_label.setText(self._progress_text(done))
+
+    def _render_results(self) -> None:
+        # Rebuilt on every new hit rather than appended to, so the list stays
+        # correctly ordered (confirmed first, then unconfirmed by similarity)
+        # throughout the scan, not just once it finishes.
+        self.results_list.clear()
+        confirmed = [hit for hit in self._hits if hit.confirmed]
+        unconfirmed = sorted((hit for hit in self._hits if not hit.confirmed), key=lambda hit: hit.similarity, reverse=True)
+        for hit in confirmed + unconfirmed:
+            status = "confirmed" if hit.confirmed else f"similarity {hit.similarity:.2f}"
+            list_item = QListWidgetItem(f"{hit.path.name}  —  {status}")
+            list_item.setData(Qt.ItemDataRole.UserRole, hit.path)
+            self.results_list.addItem(list_item)
+
+    def _on_search_finished(self, error: str) -> None:
+        self._worker = None
+        self.search_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+        if error:
+            self.status_label.setText(f"Search failed: {error}")
+            return
+        confirmed_count = sum(1 for hit in self._hits if hit.confirmed)
+        prefix = "Cancelled. " if self._cancel_requested else ""
+        self.status_label.setText(f"{prefix}{len(self._hits)} occurrence(s) found ({confirmed_count} confirmed).")
+
+    def _on_item_clicked(self, list_item: QListWidgetItem) -> None:
+        path = list_item.data(Qt.ItemDataRole.UserRole)
+        if path is not None:
+            self.photo_chosen.emit(path)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -217,6 +529,20 @@ class MainWindow(QMainWindow):
         self._image_load_generation = 0
         self._pending_image_workers: list[ImageLoadWorker] = []
 
+        if RECOGNITION_AVAILABLE:
+            self.face_catalog = FaceCatalog()
+            self.person_gallery = PersonGallery()
+            self._pending_face_workers: list[FaceDetectionWorker] = []
+            # The records for whichever photo is currently displayed, so the
+            # threshold slider can re-filter/redraw instantly without ever
+            # calling back into FaceCatalog (which would re-run detection
+            # synchronously on the UI thread if the cache weren't warm yet).
+            self._current_face_path: Path | None = None
+            self._current_face_records: list = []
+            self._current_visible_face_records: list = []  # index-addressable, matches viewer's box order
+            self._current_qimage: QImage | None = None  # for cropping face thumbnails
+            self._current_qimage_path: Path | None = None
+
         self._pending_adjustments: tuple[float, float, float] | None = None
         self._adjustment_timer = QTimer(self)
         self._adjustment_timer.setSingleShot(True)
@@ -229,11 +555,18 @@ class MainWindow(QMainWindow):
         self.edit_panel = EditPanel()
         self.metadata_panel = MetadataPanel()
 
-        # Metadata sits beside the image only (not the full window height like a
-        # dock would), so the thumbnail strip below spans the full width.
+        # One panel visible at a time, selected by tab, rather than several
+        # independently-toggleable docks -- Image Information is the default.
+        self.side_tabs = QTabWidget()
+        self.side_tabs.addTab(self.metadata_panel, "Image Information")
+        self.side_tabs.addTab(self.edit_panel, "Edit Image")
+
+        # Metadata/edit/faces sit beside the image only (not the full window
+        # height like a dock would), so the thumbnail strip below spans the
+        # full width.
         top_splitter = QSplitter(Qt.Orientation.Horizontal)
         top_splitter.addWidget(self.viewer)
-        top_splitter.addWidget(self.metadata_panel)
+        top_splitter.addWidget(self.side_tabs)
         top_splitter.setStretchFactor(0, 1)
         top_splitter.setStretchFactor(1, 0)
         top_splitter.setSizes([900, 450])
@@ -246,10 +579,25 @@ class MainWindow(QMainWindow):
         splitter.setSizes([700, 150])
         self.setCentralWidget(splitter)
 
-        self.edit_dock = QDockWidget("Edit", self)
-        self.edit_dock.setWidget(self.edit_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.edit_dock)
-        self.edit_dock.setVisible(False)
+        self.side_tabs.currentChanged.connect(self._on_side_tab_changed)
+
+        if RECOGNITION_AVAILABLE:
+            self.face_panel = FacePanel()
+            self.side_tabs.addTab(self.face_panel, "Face Recognition")
+            self.face_panel.threshold_changed.connect(self._on_face_filter_changed)
+            self.face_panel.edit_mode_toggled.connect(self._on_face_edit_mode_toggled)
+            self.face_panel.name_confirmed.connect(self._on_face_name_confirmed)
+            self.face_panel.remove_requested.connect(self._on_face_remove_requested)
+            self.face_panel.manage_people_requested.connect(self._show_manage_people_dialog)
+            self.face_panel.forget_all_requested.connect(self._on_forget_all_faces)
+            self.viewer.face_box_added.connect(self._on_face_box_added)
+            self.viewer.face_box_dismiss_requested.connect(self._on_face_remove_requested)
+
+            self.search_panel = SearchPanel(
+                self.library, self.face_catalog, self.person_gallery, self._thread_pool, self.face_panel.threshold
+            )
+            self.side_tabs.addTab(self.search_panel, "Search by Name")
+            self.search_panel.photo_chosen.connect(self._on_search_photo_chosen)
 
         self._build_menu()
         self._build_shortcuts()
@@ -345,8 +693,10 @@ class MainWindow(QMainWindow):
             add(str(rating), lambda r=rating: self._set_rating(r))
         add("0", lambda: self._set_rating(0))
 
-        add("E", self._toggle_edit_panel)
-        add("M", self._toggle_metadata_panel)
+        add("E", lambda: self.side_tabs.setCurrentWidget(self.edit_panel))
+        add("M", lambda: self.side_tabs.setCurrentWidget(self.metadata_panel))
+        if RECOGNITION_AVAILABLE:
+            add("F", lambda: self.side_tabs.setCurrentWidget(self.face_panel))
         add("R", self.edit_panel.rotate_cw.emit)
         add("Shift+R", self.edit_panel.rotate_ccw.emit)
         add("H", self.edit_panel.flip_horizontal.emit)
@@ -370,6 +720,8 @@ class MainWindow(QMainWindow):
             return
         if self.library.folder is not None:
             self.library.save_state()
+        if RECOGNITION_AVAILABLE and self.face_catalog.folder is not None:
+            self.face_catalog.save()
 
         self.edit_session = None
         try:
@@ -377,6 +729,8 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.critical(self, "Open Folder Failed", f"Could not read {folder}:\n{exc}")
             return
+        if RECOGNITION_AVAILABLE:
+            self.face_catalog.load(folder)
 
         if self._sort_mode != "name" and self.library.items:
             self.library.sort_items(key=self._sort_key(self._sort_mode))
@@ -447,6 +801,9 @@ class MainWindow(QMainWindow):
             self.edit_session = None
             self._load_image_async(item.path)
 
+        if RECOGNITION_AVAILABLE:
+            self._request_face_detection()
+
         self.thumbnail_list.select_index(self.library.current_index)
         self._update_status_bar()
 
@@ -475,12 +832,22 @@ class MainWindow(QMainWindow):
             return
         if error:
             self.statusBar().showMessage(f"Failed to load {path.name}: {error}")
-        self.viewer.set_image(qimage)
+        self.viewer.set_image(qimage)  # also clears any face-box overlay from the previous photo
         self.edit_panel.set_image_size(qimage.width(), qimage.height())
         self.edit_panel.reset_adjustment_sliders()
         self.edit_panel.set_history_enabled(False, False)
         self.viewer.set_crop_mode(False)
         self.edit_panel.set_crop_mode_active(False)
+
+        if RECOGNITION_AVAILABLE:
+            self._current_qimage = qimage
+            self._current_qimage_path = path
+            # Face detection runs concurrently and can finish before this
+            # image-load worker does; if it already has, set_image() above
+            # just wiped its overlay, so redraw it now against this (correct,
+            # just-arrived) image instead of leaving no boxes shown at all.
+            if self._current_face_path == path:
+                self._update_face_display()
 
     def _update_status_bar(self) -> None:
         item = self.library.current_item
@@ -683,15 +1050,229 @@ class MainWindow(QMainWindow):
         self.edit_panel.set_image_size(image.width, image.height)
         self.edit_panel.set_history_enabled(self.edit_session.can_undo(), self.edit_session.can_redo())
 
-    def _toggle_edit_panel(self) -> None:
-        visible = not self.edit_dock.isVisible()
-        self.edit_dock.setVisible(visible)
-        if visible:
+    def _on_side_tab_changed(self, _index: int) -> None:
+        """The side panel is a single tab widget now (Image Information /
+        Edit Image / Face Recognition / Search by Name), exactly one visible
+        at a time -- redo whatever used to happen when a dock was
+        independently toggled on."""
+        current = self.side_tabs.currentWidget()
+        if current is self.edit_panel:
             if self._ensure_edit_session() is not None:
                 self._refresh_preview()
+        elif RECOGNITION_AVAILABLE and current is self.face_panel:
+            self._request_face_detection()
+        elif RECOGNITION_AVAILABLE and current is self.search_panel:
+            self.search_panel.refresh_people()
 
-    def _toggle_metadata_panel(self) -> None:
-        self.metadata_panel.setVisible(not self.metadata_panel.isVisible())
+    # -- Face recognition ----------------------------------------------------
+
+    def _request_face_detection(self) -> None:
+        """Kick off (or re-display cached) face detection for the current photo.
+
+        No-op if the Face Recognition tab isn't the active one -- browsing
+        without it selected shouldn't pay detection's per-photo cost (a few
+        hundred ms on this machine's GPU, more on CPU) for a feature the user
+        isn't looking at.
+        """
+        if self.side_tabs.currentWidget() is not self.face_panel:
+            return
+        item = self.library.current_item
+        self._current_face_path = None
+        self._current_face_records = []
+        self._current_visible_face_records = []
+        self.viewer.set_face_boxes([])
+        self.face_panel.set_faces([])
+        if item is None:
+            self.face_panel.set_status("No photo open.")
+            return
+
+        self.face_panel.set_status(f"Detecting faces in {item.name}...")
+        worker = FaceDetectionWorker(self.face_catalog, item.path)
+        # Kept alive until it finishes, same reasoning as _pending_image_workers:
+        # otherwise its signals QObject could be garbage-collected mid-run.
+        self._pending_face_workers.append(worker)
+        worker.signals.finished.connect(
+            lambda path, records, error, w=worker: self._on_faces_detected(path, records, error, w)
+        )
+        self._thread_pool.start(worker)
+
+    def _on_faces_detected(self, path: Path, records: list, error: str, worker) -> None:
+        if worker in self._pending_face_workers:
+            self._pending_face_workers.remove(worker)
+        item = self.library.current_item
+        if item is None or path != item.path:
+            return  # user has navigated to a different photo since this was requested
+        if error:
+            self.face_panel.set_status(f"Face detection failed: {error}")
+            return
+        self._current_face_path = path
+        self._current_face_records = records
+        self._update_face_display()
+
+    def _on_face_filter_changed(self, _value: float) -> None:
+        # Pure re-filter over already-cached records -- never touches
+        # FaceCatalog or re-runs the model, so it's safe on every slider tick.
+        self._update_face_display()
+
+    def _on_face_edit_mode_toggled(self, enabled: bool) -> None:
+        self.viewer.set_face_edit_mode(enabled)
+
+    def _on_face_box_added(self, box: tuple[int, int, int, int]) -> None:
+        item = self.library.current_item
+        if item is None:
+            return
+        record = self.face_catalog.add_manual_face(item.path, box)
+        if self._current_face_path == item.path:
+            self._current_face_records.append(record)
+        self.face_catalog.save()
+        self._update_face_display()
+
+    def _on_face_remove_requested(self, index: int) -> None:
+        if index < 0 or index >= len(self._current_visible_face_records):
+            return
+        item = self.library.current_item
+        if item is None:
+            return
+        record = self._current_visible_face_records[index]
+        if record.is_manual:
+            self.face_catalog.remove_manual_face(item.path, record)
+            if record in self._current_face_records:
+                self._current_face_records.remove(record)
+        else:
+            self.face_catalog.dismiss(record)
+        self.face_catalog.save()
+        self._update_face_display()
+
+    def _on_face_name_confirmed(self, index: int, name: str) -> None:
+        if index < 0 or index >= len(self._current_visible_face_records):
+            return
+        record = self._current_visible_face_records[index]
+        current_person = self.person_gallery.find_by_id(record.person_id) if record.person_id else None
+        current_name = current_person.name if current_person is not None else ""
+        if name == current_name:
+            return  # re-confirming an unchanged name -- don't add a duplicate embedding sample
+
+        if current_person is not None:
+            # Being relabeled to someone else, or unassigned: the sample
+            # added under the old label no longer describes this face, so it
+            # shouldn't keep sitting in that person's reference data.
+            self.person_gallery.remove_embedding(current_person.id, record.embedding)
+
+        if name:
+            person = self.person_gallery.find_by_name(name) or self.person_gallery.add_person(name)
+            self.person_gallery.add_embedding(person.id, record.embedding)
+            self.face_catalog.assign_person(record, person.id)
+        else:
+            self.face_catalog.assign_person(record, None)
+
+        self.person_gallery.save()
+        self.face_catalog.save()
+        self._update_face_display()
+
+    def _show_manage_people_dialog(self) -> None:
+        dialog = ManagePeopleDialog(self.person_gallery, self)
+        dialog.exec()
+        if dialog.merges:
+            # Only the currently-loaded folder's face records can be updated
+            # here; a merged-away person's label in a folder that isn't open
+            # right now will show as unconfirmed next time that folder is
+            # opened (its correct suggestion should resurface on its own,
+            # since the same embeddings now live under the kept person).
+            for removed_id, kept_id in dialog.merges:
+                self.face_catalog.remap_person(removed_id, kept_id)
+            self.face_catalog.save()
+            self._update_face_display()
+
+    def _on_search_photo_chosen(self, path: Path) -> None:
+        index = next((i for i, item in enumerate(self.library.items) if item.path == path), None)
+        if index is None or not self._can_navigate_away():
+            return
+        self.library.current_index = index
+        self._show_current()
+
+    def _on_forget_all_faces(self) -> None:
+        if not self.person_gallery.people:
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Forget All Faces",
+            "Forget every named person and all their recognition data? This cannot be undone. "
+            "Faces already labeled in photos will show as unconfirmed again.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        self.person_gallery.people = []
+        self.person_gallery.save()
+        self.face_catalog.unassign_all_people()
+        self.face_catalog.save()
+        self._update_face_display()
+
+    def _update_face_display(self) -> None:
+        item = self.library.current_item
+        if item is None or self._current_face_path != item.path:
+            return
+        threshold = self.face_panel.threshold()
+        visible = [
+            record
+            for record in self._current_face_records
+            if not record.dismissed and (record.is_manual or record.confidence >= threshold)
+        ]
+        self._current_visible_face_records = visible
+        self.viewer.set_face_boxes([record.box for record in visible])
+        self.face_panel.set_faces([self._build_face_entry(record) for record in visible])
+        self.face_panel.set_status(
+            f"{item.name}: {len(visible)} face(s) shown ({len(self._current_face_records)} candidate(s) total)"
+        )
+
+    def _build_face_entry(self, record) -> FaceEntry:
+        # The single best guess, from the k-nearest-samples neighborhood
+        # (more robust than one lucky/unlucky sample) -- always shown (no
+        # threshold gate), its similarity conveyed to the user via color.
+        best_guess = self.person_gallery.identify(record.embedding)
+        top_suggestion = best_guess[0][0].name if best_guess else ""
+        top_suggestion_similarity = best_guess[0][1] if best_guess else 0.0
+
+        # Every known person, not just the best-guess neighborhood: lets the
+        # user manually pick someone the k-nearest cutoff excluded.
+        dropdown_entries = [
+            (person.name, similarity) for person, similarity in self.person_gallery.rank_all(record.embedding)
+        ]
+
+        confirmed_name = ""
+        if record.person_id is not None:
+            person = self.person_gallery.find_by_id(record.person_id)
+            confirmed_name = person.name if person is not None else ""
+            if confirmed_name and confirmed_name not in (name for name, _similarity in dropdown_entries):
+                dropdown_entries.insert(0, (confirmed_name, 1.0))
+
+        return FaceEntry(
+            thumbnail=self._crop_face_thumbnail(record.box),
+            dropdown_entries=dropdown_entries,
+            top_suggestion=top_suggestion,
+            top_suggestion_similarity=top_suggestion_similarity,
+            confirmed_name=confirmed_name,
+            is_manual=record.is_manual,
+        )
+
+    def _crop_face_thumbnail(self, box: tuple[int, int, int, int]) -> QPixmap:
+        if self._current_qimage is None or self._current_qimage_path != self.library.current_item.path:
+            return QPixmap()  # image for this photo hasn't finished loading yet; see _on_image_loaded
+        left, top, right, bottom = box
+        left = max(0, left)
+        top = max(0, top)
+        right = min(self._current_qimage.width(), right)
+        bottom = min(self._current_qimage.height(), bottom)
+        if right <= left or bottom <= top:
+            return QPixmap()
+        cropped = self._current_qimage.copy(QRect(left, top, right - left, bottom - top))
+        return QPixmap.fromImage(cropped).scaled(
+            THUMBNAIL_SIZE,
+            THUMBNAIL_SIZE,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
 
     def _connect_edit_panel(self) -> None:
         panel = self.edit_panel
@@ -853,6 +1434,13 @@ class MainWindow(QMainWindow):
             previous_index = self.library.current_index
             self.edit_session = None
             self.library.load(folder)
+            if RECOGNITION_AVAILABLE:
+                # Reload rather than keep the in-memory cache: some cached
+                # entries now refer to photos that just moved to selected/
+                # rejected/, and stale entries could otherwise misattribute
+                # results if a moved photo's filename gets reused later.
+                self.face_catalog.save()
+                self.face_catalog.load(folder)
             if self._sort_mode != "name" and self.library.items:
                 self.library.sort_items(key=self._sort_key(self._sort_mode))
             self.thumbnail_list.set_items(self.library.items)
@@ -876,6 +1464,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.library.save_state()
+        if RECOGNITION_AVAILABLE:
+            self.face_catalog.save()
         # Thumbnail and image-load workers run on the shared global thread pool.
         # If any are still running when Qt starts tearing down, they crash trying
         # to emit `finished` on a signals object whose C++ side is already gone.

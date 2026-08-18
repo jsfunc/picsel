@@ -3,5 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .picsel_state.json
+.picsel_faces.json
 build/
 dist/
+/pictures/
