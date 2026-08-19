@@ -11,7 +11,7 @@ the automated multi-platform build.
 
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+datas = [("docs/face_recognition.html", "docs")]
 binaries = []
 hiddenimports = []
 

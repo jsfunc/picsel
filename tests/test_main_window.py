@@ -311,3 +311,37 @@ def test_face_detection_gets_the_same_elevated_priority_as_image_loads(main_wind
     face_calls = [call for call in calls if isinstance(call[0], mw_module.FaceDetectionWorker)]
     assert face_calls, "no FaceDetectionWorker was started"
     assert all(priority == mw_module.IMAGE_LOAD_PRIORITY for _, priority in face_calls)
+
+
+def test_bundled_resource_path_resolves_relative_to_the_repo_when_not_frozen():
+    path = mw_module._bundled_resource_path("docs/face_recognition.html")
+    assert path.name == "face_recognition.html"
+    assert path.exists()  # the real docs file, resolved from source (not frozen in tests)
+
+
+def test_open_face_recognition_docs_opens_the_real_bundled_file(main_window, monkeypatch):
+    opened = []
+    monkeypatch.setattr(mw_module.QDesktopServices, "openUrl", staticmethod(lambda url: opened.append(url)))
+
+    main_window._open_face_recognition_docs()
+
+    assert opened
+    assert opened[0].toLocalFile().endswith("docs/face_recognition.html")
+    assert Path(opened[0].toLocalFile()).exists()
+
+
+def test_open_face_recognition_docs_warns_instead_of_opening_a_missing_file(main_window, monkeypatch):
+    monkeypatch.setattr(
+        mw_module, "_bundled_resource_path", lambda relative: Path("/nonexistent/face_recognition.html")
+    )
+    opened = []
+    monkeypatch.setattr(mw_module.QDesktopServices, "openUrl", staticmethod(lambda url: opened.append(url)))
+    warned = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a) or QMessageBox.StandardButton.Ok)
+    )
+
+    main_window._open_face_recognition_docs()
+
+    assert not opened
+    assert warned

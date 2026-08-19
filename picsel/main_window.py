@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QFontDatabase, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QRect, Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QFontDatabase, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -97,6 +98,19 @@ if RECOGNITION_AVAILABLE:
         "  M               Show Image Information panel\n",
         "  M               Show Image Information panel\n  F               Show Face Recognition panel\n",
     )
+
+
+def _bundled_resource_path(relative: str) -> Path:
+    """Resolve a bundled data file's path, whether running from source or as
+    a frozen PyInstaller executable -- picsel.spec's one-file build extracts
+    its `datas` into a temp dir at runtime, referenced by `sys._MEIPASS`,
+    rather than leaving them alongside the source tree.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    else:
+        base = Path(__file__).resolve().parent.parent  # repo root
+    return base / relative
 
 
 class ApplyCullingDialog(QDialog):
@@ -737,6 +751,11 @@ class MainWindow(QMainWindow):
         shortcuts_action.triggered.connect(self._show_shortcuts)
         help_menu.addAction(shortcuts_action)
 
+        if RECOGNITION_AVAILABLE:
+            face_docs_action = QAction("Face Recognition Docs", self)
+            face_docs_action.triggered.connect(self._open_face_recognition_docs)
+            help_menu.addAction(face_docs_action)
+
         about_action = QAction("About picSel", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
@@ -775,6 +794,13 @@ class MainWindow(QMainWindow):
 
     def _show_shortcuts(self) -> None:
         QMessageBox.information(self, "Keyboard Shortcuts", SHORTCUTS_TEXT)
+
+    def _open_face_recognition_docs(self) -> None:
+        path = _bundled_resource_path("docs/face_recognition.html")
+        if not path.exists():
+            QMessageBox.warning(self, "Face Recognition Docs", f"Documentation file not found:\n{path}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _show_about(self) -> None:
         recognition_line = (
