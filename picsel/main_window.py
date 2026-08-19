@@ -1602,8 +1602,32 @@ class MainWindow(QMainWindow):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
+        # Snapshot which items are candidates to move, and their pre-move
+        # path, so we can tell afterward which ones actually moved (vs.
+        # errored partway and stayed put) -- needed below to invalidate just
+        # their cached face data, not everything.
+        moved_candidates = [
+            (item, item.path) for item in self.library.items if item.status in (Status.SELECTED, Status.REJECTED)
+        ]
+
         report = apply_culling(self.library, mode=mode, selected_dir=selected_dir, rejected_dir=rejected_dir)
-        self._save_library_state()
+
+        if RECOGNITION_AVAILABLE and mode == "move":
+            # Drop cached face data for anything that actually left this
+            # folder *before* it can be saved -- otherwise the save below
+            # would write those now-orphaned entries into this folder's
+            # .picsel_faces.json, ready to misattribute results if a future
+            # photo reuses the same filename here (the same class of bug as
+            # the ratings/status one this method already guards against by
+            # saving only after the reload below).
+            for item, original_path in moved_candidates:
+                if item.path != original_path:
+                    self.face_catalog.invalidate(original_path)
+
+        if mode == "copy":
+            # Nothing moved out of this folder -- self.library.items still
+            # accurately reflects what's here, so this is safe to save now.
+            self._save_library_state()
 
         message = f"Moved {report.moved_selected} selected and {report.moved_rejected} rejected image(s)."
         if report.errors:
@@ -1622,11 +1646,18 @@ class MainWindow(QMainWindow):
                 return
             if self.library.load_error:
                 QMessageBox.warning(self, "Ratings/Status", self.library.load_error)
+            # Only now, after the reload -- self.library.items reflects what's
+            # actually still in this folder, so the rewritten state file
+            # can't include stale entries for photos that just moved out
+            # (save_state() rewrites the whole file from self.items, it
+            # doesn't merge, so this naturally scrubs them).
+            self._save_library_state()
             if RECOGNITION_AVAILABLE:
                 # Reload rather than keep the in-memory cache: some cached
                 # entries now refer to photos that just moved to selected/
                 # rejected/, and stale entries could otherwise misattribute
-                # results if a moved photo's filename gets reused later.
+                # results if a moved photo's filename gets reused later --
+                # already invalidated above, so this save is now clean too.
                 self._save_face_catalog()
                 self.face_catalog.load(folder)
                 if self.face_catalog.load_error:

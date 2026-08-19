@@ -6,9 +6,11 @@ import pytest
 pytest.importorskip("torch")  # face recognition deps are optional; see requirements-recognition.txt
 
 from PIL import Image  # noqa: E402
-from PySide6.QtWidgets import QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QDialog, QMessageBox  # noqa: E402
 
+import picsel.main_window as mw_module  # noqa: E402
 from picsel import __version__  # noqa: E402
+from picsel.models import Status  # noqa: E402
 
 
 def _make_photos(folder: Path, count: int = 2) -> None:
@@ -220,3 +222,62 @@ def test_about_dialog_shows_the_version(main_window, monkeypatch):
     title, text = shown[0]
     assert title == "About picSel"
     assert __version__ in text
+
+
+def _auto_accept_apply_culling(monkeypatch) -> None:
+    monkeypatch.setattr(mw_module.ApplyCullingDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+
+
+def test_apply_culling_move_does_not_leave_a_stale_rating_for_the_moved_photo(
+    main_window, tmp_path, qapp, monkeypatch
+):
+    # Regression test: save_state() previously ran *before* the post-move
+    # reload, while self.library.items still listed the just-moved photo --
+    # writing its rating into the parent folder's .picsel_state.json even
+    # though the photo no longer lives there. If a future photo reused that
+    # exact filename in this folder, it would silently inherit the stale
+    # rating/status.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=2)
+    main_window.open_folder(photos)
+    main_window.library.set_status(0, Status.SELECTED)
+    main_window.library.set_rating(0, 5)
+    moved_name = main_window.library.items[0].name
+
+    _auto_accept_apply_culling(monkeypatch)
+    main_window._apply_culling()
+
+    state_path = photos / ".picsel_state.json"
+    if state_path.exists():
+        assert moved_name not in state_path.read_text()
+    assert (photos / "selected" / moved_name).exists()
+
+
+def test_apply_culling_move_invalidates_cached_face_data_for_the_moved_photo(
+    main_window, tmp_path, qapp, monkeypatch
+):
+    # Regression test: same bug as the ratings/status one above, but for
+    # cached face detections -- face_catalog.save() ran before the reload
+    # too, and FaceCatalog.load() (unlike ImageLibrary.load()) never
+    # cross-checks its entries against what's actually still on disk, so
+    # reordering alone wouldn't have fixed this half; the moved photo's
+    # cached record must be explicitly invalidated before the save.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=2)
+    main_window.open_folder(photos)
+    moved_item = main_window.library.items[0]
+    moved_name = moved_item.name
+    main_window.face_catalog.add_manual_face(moved_item.path, box=(5, 5, 20, 20))
+    main_window.library.set_status(0, Status.SELECTED)
+
+    _auto_accept_apply_culling(monkeypatch)
+    main_window._apply_culling()
+
+    faces_path = photos / ".picsel_faces.json"
+    if faces_path.exists():
+        assert moved_name not in faces_path.read_text()
+    assert moved_name not in main_window.face_catalog._records
