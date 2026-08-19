@@ -9,6 +9,8 @@ from PIL import Image, ImageOps
 from PySide6.QtCore import QObject, QRunnable, Signal
 from PySide6.QtGui import QImage
 
+from picsel.metadata import MetadataSection, extract_metadata
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_THUMBNAIL_SIZE = (160, 160)
@@ -82,3 +84,31 @@ class ImageLoadWorker(QRunnable):
             image = QImage()
             error = str(exc)
         self.signals.finished.emit(self.path, image, error)
+
+
+class MetadataLoadSignals(QObject):
+    finished = Signal(object, list, str)  # path, list[MetadataSection] (empty on failure), error message ("" if ok)
+
+
+class MetadataLoadWorker(QRunnable):
+    """Reads EXIF/GPS metadata off the UI thread and emits the result via
+    signals -- extract_metadata() does file I/O plus IFD parsing per call,
+    which previously ran synchronously on the UI thread on every single
+    photo navigation, the one exception to this app's otherwise-consistent
+    "decode/detect off the UI thread" pattern (thumbnails, full-image
+    decode, and face detection are all already async via this same
+    QThreadPool)."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self.path = path
+        self.signals = MetadataLoadSignals()
+
+    def run(self) -> None:
+        try:
+            sections: list[MetadataSection] = extract_metadata(self.path)
+            error = ""
+        except Exception as exc:
+            sections = []
+            error = str(exc)
+        self.signals.finished.emit(self.path, sections, error)

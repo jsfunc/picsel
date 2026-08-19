@@ -89,6 +89,11 @@ python -m pytest
 
 ## Standalone executables
 
+Before tagging a release, bump `__version__` in
+[picsel/\_\_init\_\_.py](picsel/__init__.py) to match — it drives the window
+title, `Help > About picSel`, and `python main.py --version`, but nothing
+derives it from the git tag automatically.
+
 Pushing a tag like `v1.0.0` triggers [.github/workflows/release.yml](.github/workflows/release.yml),
 which builds a standalone executable for Linux, Windows, and macOS (Apple
 Silicon) with [PyInstaller](https://pyinstaller.org/) and attaches them to a

@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from picsel import __version__
 from picsel.editing import EditSession
 from picsel.io_ops import (
     apply_culling,
@@ -40,7 +41,7 @@ from picsel.io_ops import (
     rename_with_sequence,
 )
 from picsel.models import ImageItem, ImageLibrary, Status
-from picsel.thumbnails import ImageLoadWorker, pil_to_qimage
+from picsel.thumbnails import ImageLoadWorker, MetadataLoadWorker, pil_to_qimage
 from picsel.views.edit_panel import EditPanel
 from picsel.views.image_viewer import ImageViewer
 from picsel.views.metadata_panel import MetadataPanel
@@ -292,6 +293,12 @@ class ManagePeopleDialog(QDialog):
             list_item.setData(Qt.ItemDataRole.UserRole, person.id)
             self.list_widget.addItem(list_item)
 
+    def _save_gallery(self) -> None:
+        try:
+            self.gallery.save()
+        except OSError as exc:
+            QMessageBox.warning(self, "Save Failed", f"Could not save the people gallery:\n{exc}")
+
     def _on_rename_clicked(self) -> None:
         selected_ids = [item.data(Qt.ItemDataRole.UserRole) for item in self.list_widget.selectedItems()]
         if len(selected_ids) != 1:
@@ -304,7 +311,7 @@ class ManagePeopleDialog(QDialog):
             return
 
         person.name = name.strip()
-        self.gallery.save()
+        self._save_gallery()
         self._refresh_list()
 
     def _on_merge_clicked(self) -> None:
@@ -323,7 +330,7 @@ class ManagePeopleDialog(QDialog):
             self.gallery.merge(keep_id=keep_id, remove_id=remove_id)
             self.merges.append((remove_id, keep_id))
         self.gallery.find_by_id(keep_id).name = name.strip()
-        self.gallery.save()
+        self._save_gallery()
         self._refresh_list()
 
     def _on_forget_clicked(self) -> None:
@@ -346,7 +353,7 @@ class ManagePeopleDialog(QDialog):
         for person_id in selected_ids:
             self.gallery.remove_person(person_id)
             self.forgotten_ids.append(person_id)
-        self.gallery.save()
+        self._save_gallery()
         self._refresh_list()
 
     def _on_export_clicked(self) -> None:
@@ -378,7 +385,7 @@ class ManagePeopleDialog(QDialog):
         except (OSError, json.JSONDecodeError, KeyError) as exc:
             QMessageBox.critical(self, "Import Failed", f"Could not read {chosen}:\n{exc}")
             return
-        self.gallery.save()
+        self._save_gallery()
         self._refresh_list()
         QMessageBox.information(
             self,
@@ -558,7 +565,7 @@ class SearchPanel(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("picSel")
+        self.setWindowTitle(f"picSel {__version__}")
         self.resize(1280, 860)
 
         self.library = ImageLibrary()
@@ -568,6 +575,9 @@ class MainWindow(QMainWindow):
 
         self._image_load_generation = 0
         self._pending_image_workers: list[ImageLoadWorker] = []
+
+        self._metadata_load_generation = 0
+        self._pending_metadata_workers: list[MetadataLoadWorker] = []
 
         if RECOGNITION_AVAILABLE:
             self.face_catalog = FaceCatalog()
@@ -718,6 +728,10 @@ class MainWindow(QMainWindow):
         shortcuts_action.triggered.connect(self._show_shortcuts)
         help_menu.addAction(shortcuts_action)
 
+        about_action = QAction("About picSel", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
+
     def _build_shortcuts(self) -> None:
         def add(sequence: str, handler) -> None:
             shortcut = QShortcut(QKeySequence(sequence), self)
@@ -753,6 +767,19 @@ class MainWindow(QMainWindow):
     def _show_shortcuts(self) -> None:
         QMessageBox.information(self, "Keyboard Shortcuts", SHORTCUTS_TEXT)
 
+    def _show_about(self) -> None:
+        recognition_line = (
+            "Face recognition: enabled" if RECOGNITION_AVAILABLE else "Face recognition: not installed"
+        )
+        QMessageBox.about(
+            self,
+            "About picSel",
+            f"<b>picSel</b> {__version__}<br><br>"
+            "A small desktop app for culling and lightly editing a folder of photos.<br><br>"
+            f"{recognition_line}<br><br>"
+            'GPLv3 — <a href="https://github.com/jsfunc/picsel">github.com/jsfunc/picsel</a>',
+        )
+
     # -- Folder / library ----------------------------------------------------
 
     def _choose_folder(self) -> None:
@@ -764,9 +791,9 @@ class MainWindow(QMainWindow):
         if not self._can_navigate_away():
             return
         if self.library.folder is not None:
-            self.library.save_state()
+            self._save_library_state()
         if RECOGNITION_AVAILABLE and self.face_catalog.folder is not None:
-            self.face_catalog.save()
+            self._save_face_catalog()
 
         self.edit_session = None
         try:
@@ -783,7 +810,7 @@ class MainWindow(QMainWindow):
             self.library.sort_items(key=self._sort_key(self._sort_mode))
 
         self.thumbnail_list.set_items(self.library.items)
-        self.setWindowTitle(f"picSel — {folder}")
+        self.setWindowTitle(f"picSel {__version__} — {folder}")
 
         if self.library.items:
             self.library.current_index = 0
@@ -792,6 +819,33 @@ class MainWindow(QMainWindow):
             self.viewer.set_image(QImage())
             self.metadata_panel.set_image(None)
             self.statusBar().showMessage(f"No supported images found in {folder}")
+
+    # -- Persistence helpers ---------------------------------------------
+    # Every actual file operation elsewhere in this class (rename, save-as,
+    # culling) is wrapped in try/except OSError with a message shown to the
+    # user; these three wrap the equivalent for the app's own state files
+    # (ratings/status, per-folder face cache, person gallery) so a folder on
+    # removable/network media going unwritable mid-session reports a clear
+    # error instead of raising out of whatever keyboard shortcut or signal
+    # handler happened to trigger the save.
+
+    def _save_library_state(self) -> None:
+        try:
+            self.library.save_state()
+        except OSError as exc:
+            QMessageBox.warning(self, "Save Failed", f"Could not save photo ratings/status:\n{exc}")
+
+    def _save_face_catalog(self) -> None:
+        try:
+            self.face_catalog.save()
+        except OSError as exc:
+            QMessageBox.warning(self, "Save Failed", f"Could not save face data:\n{exc}")
+
+    def _save_person_gallery(self) -> None:
+        try:
+            self.person_gallery.save()
+        except OSError as exc:
+            QMessageBox.warning(self, "Save Failed", f"Could not save the people gallery:\n{exc}")
 
     # -- Navigation ----------------------------------------------------
 
@@ -839,8 +893,12 @@ class MainWindow(QMainWindow):
             return
 
         # Metadata reflects the on-disk file regardless of any pending unsaved
-        # edits, and doesn't need to wait on the (async) full-resolution decode.
-        self.metadata_panel.set_image(item.path)
+        # edits, and doesn't need to wait on the (async) full-resolution decode
+        # -- but it's read asynchronously too now, same reasoning as the image
+        # itself: extract_metadata() does file I/O + IFD parsing per call, and
+        # running that on the UI thread on every single navigation could
+        # visibly stutter rapid next/prev browsing.
+        self._load_metadata_async(item.path)
 
         if self.edit_session is not None and self.edit_session.source_path == item.path:
             self._refresh_preview()
@@ -901,6 +959,28 @@ class MainWindow(QMainWindow):
             if self._current_face_path == path:
                 self._update_face_display()
 
+    def _load_metadata_async(self, path: Path) -> None:
+        self._metadata_load_generation += 1
+        generation = self._metadata_load_generation
+        worker = MetadataLoadWorker(path)
+        # Kept alive until it finishes, same reasoning as _pending_image_workers.
+        self._pending_metadata_workers.append(worker)
+        worker.signals.finished.connect(
+            lambda p, sections, error, gen=generation, w=worker: self._on_metadata_loaded(gen, p, sections, error, w)
+        )
+        self._thread_pool.start(worker)
+
+    def _on_metadata_loaded(
+        self, generation: int, path: Path, sections: list, error: str, worker: MetadataLoadWorker
+    ) -> None:
+        if worker in self._pending_metadata_workers:
+            self._pending_metadata_workers.remove(worker)
+        if generation != self._metadata_load_generation:
+            return  # user has navigated to a different photo since this was requested
+        if error:
+            self.statusBar().showMessage(f"Failed to load metadata for {path.name}: {error}")
+        self.metadata_panel.set_sections(sections)
+
     def _update_status_bar(self) -> None:
         item = self.library.current_item
         if item is None:
@@ -952,7 +1032,7 @@ class MainWindow(QMainWindow):
             return
         self.library.set_status(self.library.current_index, status)
         self.thumbnail_list.refresh_badges()
-        self.library.save_state()
+        self._save_library_state()
         self._update_status_bar()
 
     def _set_rating(self, rating: int) -> None:
@@ -960,7 +1040,7 @@ class MainWindow(QMainWindow):
             return
         self.library.set_rating(self.library.current_index, rating)
         self.thumbnail_list.refresh_badges()
-        self.library.save_state()
+        self._save_library_state()
         self._update_status_bar()
 
     # -- Rename ----------------------------------------------------
@@ -986,7 +1066,7 @@ class MainWindow(QMainWindow):
 
         self.edit_session = None
         self.thumbnail_list.refresh_badges()
-        self.library.save_state()
+        self._save_library_state()
         self.statusBar().showMessage(f"Renamed to {new_path.name}")
         self._update_status_bar()
 
@@ -1038,7 +1118,7 @@ class MainWindow(QMainWindow):
                 self.library.current_index = self.library.items.index(current_item)
             self.edit_session = None
             self.thumbnail_list.set_items(self.library.items)
-            self.library.save_state()
+            self._save_library_state()
             self._show_current()
 
         message = "\n".join(summary_lines)
@@ -1075,7 +1155,7 @@ class MainWindow(QMainWindow):
                 self.library.current_index = self.library.items.index(current_item)
             self.edit_session = None
             self.thumbnail_list.set_items(self.library.items)
-            self.library.save_state()
+            self._save_library_state()
             self._show_current()
 
         message = f"{report.renamed} renamed"
@@ -1196,7 +1276,7 @@ class MainWindow(QMainWindow):
         record = self.face_catalog.add_manual_face(item.path, box)
         if self._current_face_path == item.path:
             self._current_face_records.append(record)
-        self.face_catalog.save()
+        self._save_face_catalog()
         self._update_face_display()
 
     def _on_face_remove_requested(self, index: int) -> None:
@@ -1212,7 +1292,7 @@ class MainWindow(QMainWindow):
                 self._current_face_records.remove(record)
         else:
             self.face_catalog.dismiss(record)
-        self.face_catalog.save()
+        self._save_face_catalog()
         self._update_face_display()
 
     def _on_face_name_confirmed(self, index: int, name: str) -> None:
@@ -1237,8 +1317,8 @@ class MainWindow(QMainWindow):
         else:
             self.face_catalog.assign_person(record, None)
 
-        self.person_gallery.save()
-        self.face_catalog.save()
+        self._save_person_gallery()
+        self._save_face_catalog()
         self._update_face_display()
 
     def _show_manage_people_dialog(self) -> None:
@@ -1254,7 +1334,7 @@ class MainWindow(QMainWindow):
                 self.face_catalog.remap_person(removed_id, kept_id)
             for forgotten_id in dialog.forgotten_ids:
                 self.face_catalog.forget_person(forgotten_id)
-            self.face_catalog.save()
+            self._save_face_catalog()
             self._update_face_display()
 
     def _on_search_photo_chosen(self, path: Path) -> None:
@@ -1278,9 +1358,9 @@ class MainWindow(QMainWindow):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         self.person_gallery.people = []
-        self.person_gallery.save()
+        self._save_person_gallery()
         self.face_catalog.unassign_all_people()
-        self.face_catalog.save()
+        self._save_face_catalog()
         self._update_face_display()
 
     def _update_face_display(self) -> None:
@@ -1508,7 +1588,7 @@ class MainWindow(QMainWindow):
             return
 
         report = apply_culling(self.library, mode=mode, selected_dir=selected_dir, rejected_dir=rejected_dir)
-        self.library.save_state()
+        self._save_library_state()
 
         message = f"Moved {report.moved_selected} selected and {report.moved_rejected} rejected image(s)."
         if report.errors:
@@ -1530,7 +1610,7 @@ class MainWindow(QMainWindow):
                 # entries now refer to photos that just moved to selected/
                 # rejected/, and stale entries could otherwise misattribute
                 # results if a moved photo's filename gets reused later.
-                self.face_catalog.save()
+                self._save_face_catalog()
                 self.face_catalog.load(folder)
                 if self.face_catalog.load_error:
                     QMessageBox.warning(self, "Face Data", self.face_catalog.load_error)
@@ -1556,9 +1636,9 @@ class MainWindow(QMainWindow):
     # -- Lifecycle ----------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        self.library.save_state()
+        self._save_library_state()
         if RECOGNITION_AVAILABLE:
-            self.face_catalog.save()
+            self._save_face_catalog()
         # Thumbnail and image-load workers run on the shared global thread pool.
         # If any are still running when Qt starts tearing down, they crash trying
         # to emit `finished` on a signals object whose C++ side is already gone.
