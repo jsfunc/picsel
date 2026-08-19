@@ -8,8 +8,12 @@
 #
 # On a machine with no NVIDIA GPU, installing this way still works but wastes
 # ~2GB downloading unused CUDA libraries. Avoid that with the CPU-only wheel
-# index instead:
-#   pip install --index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
+# index instead -- --extra-index-url, not --index-url: facenet-pytorch only
+# exists on PyPI, not on download.pytorch.org, so replacing the index
+# entirely (--index-url) fails to find it (confirmed: "No matching
+# distribution found for facenet-pytorch"). --extra-index-url adds the CPU
+# wheels as an additional source instead of replacing PyPI.
+#   pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
 torch>=2.2
 torchvision>=0.17
 facenet-pytorch>=2.5

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from picsel.editing import EditSession
@@ -118,3 +119,61 @@ def test_save_overwrite_replaces_original(tmp_path):
     session.rotate()
     saved_path = session.save(overwrite=True)
     assert saved_path == path
+
+
+def test_save_does_not_pass_the_raw_exif_blob_through_verbatim(tmp_path):
+    # A real camera JPEG's raw exif blob can carry an embedded IFD1
+    # thumbnail depicting the original framing. Passing that raw blob
+    # through unparsed to Pillow's JPEG writer would leave a cropped-out
+    # subject fully visible in the saved file's embedded thumbnail even
+    # though the real pixels are correctly cropped -- save() must instead
+    # re-serialize via getexif().tobytes(), which only ever includes IFD0
+    # plus explicitly-accessed sub-IFDs, never a stale IFD1/thumbnail.
+    path = tmp_path / "photo.jpg"
+    image = Image.new("RGB", (40, 40), (10, 20, 30))
+    exif = Image.Exif()
+    exif[0x9003] = "2020:01:01 12:00:00"  # DateTimeOriginal
+    image.save(path, exif=exif.tobytes())
+
+    session = EditSession.from_path(path)
+    # Simulate a real camera file's raw exif blob carrying extra payload
+    # beyond plain IFD0 tags (standing in for an embedded IFD1 thumbnail).
+    # getexif() is unaffected by this since it was parsed once at load time
+    # -- exactly the property that makes save() safe.
+    sentinel = b"FAKE-THUMBNAIL-PAYLOAD-SENTINEL"
+    session._original.info["exif"] = session._original.info["exif"] + sentinel
+
+    session.crop((5, 5, 35, 35))
+    saved_path = session.save(overwrite=False)
+
+    saved_bytes = saved_path.read_bytes()
+    assert sentinel not in saved_bytes
+    with Image.open(saved_path) as saved:
+        assert saved.getexif().get(0x9003) == "2020:01:01 12:00:00"  # real tags still preserved
+
+
+def test_save_overwrite_does_not_corrupt_original_if_the_write_fails(tmp_path, monkeypatch):
+    session, path = _make_session(tmp_path)
+    original_bytes = path.read_bytes()
+    session.rotate()
+
+    # Writes garbage to whatever file Pillow was actually asked to save to,
+    # then fails -- simulating a real partial/failed write (e.g. disk full
+    # partway through), not just an error before any bytes are touched.
+    # This is the detail that distinguishes "wrote to a temp file, so the
+    # original is untouched" from "wrote straight into the original, so it's
+    # now corrupted": if save() ever regresses to writing `path` directly,
+    # this test would find `path` itself holding the garbage bytes below.
+    def failing_save(self, fp, *args, **kwargs):
+        Path(fp).write_bytes(b"CORRUPTED-PARTIAL-WRITE")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Image.Image, "save", failing_save)
+
+    with pytest.raises(OSError):
+        session.save(overwrite=True)
+
+    # The original must be untouched -- save() writes to a temp file first
+    # and only replaces the original once the write fully succeeds.
+    assert path.read_bytes() == original_bytes
+    assert not list(tmp_path.glob(".picsel_save_*"))  # no leftover temp file either

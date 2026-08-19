@@ -63,7 +63,7 @@ avoid downloading ~2GB of unused CUDA libraries with the CPU-only wheel
 index instead:
 
 ```bash
-pip install --index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
+pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
 ```
 
 Without these dependencies installed, the app runs normally with the Face

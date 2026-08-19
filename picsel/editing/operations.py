@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -174,10 +176,32 @@ class EditSession:
         # Read exif from `_original`, not the rendered image: ImageEnhance (used for
         # brightness/contrast/saturation) drops `.info` entirely, so a rendered image
         # that went through an adjustment would otherwise report no exif at all.
-        exif = self._original.info.get("exif")
+        # Re-serialized via getexif().tobytes() rather than passed through as the
+        # raw `_original.info["exif"]` blob: a real camera JPEG's raw blob can carry
+        # an embedded IFD1 thumbnail depicting the *original* framing, and Pillow's
+        # JPEG writer copies a raw bytes `exif=` blob through completely unparsed --
+        # so a crop meant to remove someone/something from the photo could otherwise
+        # leave them fully visible in the saved file's embedded thumbnail. Exif.tobytes()
+        # only ever serializes IFD0 plus explicitly-accessed sub-IFDs (Exif/GPS/Interop),
+        # never IFD1, so this can't happen.
+        exif = self._original.getexif()
         if exif:
-            save_kwargs["exif"] = exif
-        image.save(path, **save_kwargs)
+            save_kwargs["exif"] = exif.tobytes()
+
+        # Write to a same-directory temp file and rename into place, rather than
+        # letting Pillow's JPEG writer stream straight into `path` -- when path is
+        # the original being overwritten, a crash or a full disk mid-write would
+        # otherwise leave the user's original photo truncated with no way back.
+        # os.replace() is atomic on both POSIX and Windows as long as source and
+        # destination are on the same filesystem, which a same-directory temp file
+        # guarantees.
+        temp_path = path.with_name(f".picsel_save_{uuid.uuid4().hex}{path.suffix}")
+        try:
+            image.save(temp_path, **save_kwargs)
+            os.replace(temp_path, path)
+        except BaseException:
+            temp_path.unlink(missing_ok=True)
+            raise
         self._saved_ops = list(self._ops)
         self._saved_adjustments = dict(self._adjustments)
         return path

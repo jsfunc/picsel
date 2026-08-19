@@ -776,6 +776,8 @@ class MainWindow(QMainWindow):
             return
         if RECOGNITION_AVAILABLE:
             self.face_catalog.load(folder)
+            if self.face_catalog.load_error:
+                QMessageBox.warning(self, "Face Data", self.face_catalog.load_error)
 
         if self._sort_mode != "name" and self.library.items:
             self.library.sort_items(key=self._sort_key(self._sort_mode))
@@ -885,6 +887,11 @@ class MainWindow(QMainWindow):
         self.edit_panel.set_crop_mode_active(False)
 
         if RECOGNITION_AVAILABLE:
+            # Symmetric with crop mode above: a face box drawn against the
+            # previous photo shouldn't silently carry over and get attached
+            # to whichever photo happens to load next.
+            self.viewer.set_face_edit_mode(False)
+            self.face_panel.set_edit_mode_active(False)
             self._current_qimage = qimage
             self._current_qimage_path = path
             # Face detection runs concurrently and can finish before this
@@ -1101,6 +1108,19 @@ class MainWindow(QMainWindow):
         at a time -- redo whatever used to happen when a dock was
         independently toggled on."""
         current = self.side_tabs.currentWidget()
+        # Crop mode and face-edit mode are both interpreted by the image
+        # viewer's mouse handlers regardless of which tab is showing --
+        # the viewer isn't itself part of any tab, so it stays visible and
+        # interactive when the user switches away. Without this, leaving
+        # either mode on while switching tabs let a drag on the photo
+        # silently crop it or silently add a face box the user never meant
+        # to draw.
+        if current is not self.edit_panel:
+            self.viewer.set_crop_mode(False)
+            self.edit_panel.set_crop_mode_active(False)
+        if RECOGNITION_AVAILABLE and current is not self.face_panel:
+            self.viewer.set_face_edit_mode(False)
+            self.face_panel.set_edit_mode_active(False)
         if current is self.edit_panel:
             if self._ensure_edit_session() is not None:
                 self._refresh_preview()
@@ -1500,7 +1520,11 @@ class MainWindow(QMainWindow):
             previous_name = self.library.current_item.name if self.library.current_item else None
             previous_index = self.library.current_index
             self.edit_session = None
-            self.library.load(folder)
+            try:
+                self.library.load(folder)
+            except OSError as exc:
+                QMessageBox.critical(self, "Apply Culling", f"Photos were moved, but reloading {folder} failed:\n{exc}")
+                return
             if RECOGNITION_AVAILABLE:
                 # Reload rather than keep the in-memory cache: some cached
                 # entries now refer to photos that just moved to selected/
@@ -1508,6 +1532,8 @@ class MainWindow(QMainWindow):
                 # results if a moved photo's filename gets reused later.
                 self.face_catalog.save()
                 self.face_catalog.load(folder)
+                if self.face_catalog.load_error:
+                    QMessageBox.warning(self, "Face Data", self.face_catalog.load_error)
             if self._sort_mode != "name" and self.library.items:
                 self.library.sort_items(key=self._sort_key(self._sort_mode))
             self.thumbnail_list.set_items(self.library.items)

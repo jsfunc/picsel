@@ -37,6 +37,85 @@ def test_faces_for_runs_detection_only_once_per_image(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
+def test_load_corrupted_state_file_sets_load_error(tmp_path):
+    (tmp_path / FACES_FILENAME).write_text("not valid json{{{")
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+
+    assert catalog._records == {}
+    assert catalog.load_error is not None
+    assert str(tmp_path / FACES_FILENAME) in catalog.load_error
+
+
+def test_load_missing_state_file_leaves_load_error_none(tmp_path):
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    assert catalog.load_error is None
+
+
+def test_load_error_resets_on_a_later_successful_load(tmp_path):
+    other_folder = tmp_path / "other"
+    other_folder.mkdir()
+    (tmp_path / FACES_FILENAME).write_text("not valid json{{{")
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    assert catalog.load_error is not None
+
+    catalog.load(other_folder)  # a folder with no sidecar at all -- perfectly normal
+    assert catalog.load_error is None
+
+
+class _EmbeddingWithSideEffect:
+    """Wraps a real embedding array so `.tolist()` (called by `save()` while
+    building its JSON-able dict) can trigger an arbitrary side effect on its
+    first call -- used below to simulate a background worker inserting a new
+    key into `self._records` partway through `save()`'s iteration, exactly
+    the race `list(self._records.items())` guards against."""
+
+    def __init__(self, real, on_first_call) -> None:
+        self._real = real
+        self._on_first_call = on_first_call
+
+    def tolist(self):
+        if self._on_first_call is not None:
+            callback, self._on_first_call = self._on_first_call, None
+            callback()
+        return self._real.tolist()
+
+
+def test_save_tolerates_a_key_inserted_mid_iteration(tmp_path):
+    # Simulates a background FaceDetectionWorker/FolderSearchWorker inserting
+    # a new photo's records into self._records (via faces_for()) while save()
+    # is mid-iteration on the GUI thread -- previously raised "dictionary
+    # changed size during iteration" (a real RuntimeError, not hypothetical,
+    # since save() iterated the live dict directly).
+    path_a = tmp_path / "a.jpg"
+    _make_image(path_a)
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    record = catalog.add_manual_face(path_a, box=(10, 10, 50, 50))
+
+    def insert_concurrently():
+        catalog._records["b.jpg"] = [record]
+
+    record.embedding = _EmbeddingWithSideEffect(record.embedding, insert_concurrently)
+
+    catalog.save()  # must not raise RuntimeError: dictionary changed size during iteration
+
+    # The concurrently-inserted "b.jpg" key exists in memory (the point of
+    # the race guard is "don't crash", not "capture a mutation that happens
+    # after this save() already took its snapshot") -- it'll be picked up by
+    # the next save().
+    assert "b.jpg" in catalog._records
+
+    reloaded = FaceCatalog()
+    reloaded.load(tmp_path)
+    assert set(reloaded._records.keys()) == {"a.jpg"}
+
+
 def test_faces_for_does_not_cache_stale_result_after_folder_switch(tmp_path):
     folder_a = tmp_path / "a"
     folder_b = tmp_path / "b"

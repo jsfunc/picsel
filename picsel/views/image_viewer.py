@@ -28,6 +28,16 @@ class ImageViewer(QGraphicsView):
         self._pixmap_item = QGraphicsPixmapItem()
         self._scene.addItem(self._pixmap_item)
 
+        # Set once the user has manually zoomed (wheel), so resizeEvent stops
+        # force-refitting the image on every viewport resize -- that resize
+        # isn't only the window resizing, it's also the splitter between the
+        # image and the side panel (or the filmstrip) being nudged, which
+        # otherwise silently threw away a deliberate zoom-in (e.g. to check
+        # focus) any time the user touched an unrelated splitter. Reset on
+        # each new image, so browsing to the next photo still starts fit to
+        # the window like before; double-click resets it early too.
+        self._user_zoomed = False
+
         self._crop_mode = False
         self._crop_rect_item: QGraphicsRectItem | None = None
         self._crop_origin = None
@@ -50,6 +60,7 @@ class ImageViewer(QGraphicsView):
         self.set_face_boxes([])  # a new image's face boxes haven't been (re)computed yet
         self._pixmap_item.setPixmap(pixmap)
         self._scene.setSceneRect(self._pixmap_item.boundingRect())
+        self._user_zoomed = False
         self.fit_to_window()
 
     def fit_to_window(self) -> None:
@@ -59,13 +70,26 @@ class ImageViewer(QGraphicsView):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self.fit_to_window()
+        if not self._user_zoomed:
+            self.fit_to_window()
 
     def wheelEvent(self, event) -> None:
         if self._pixmap_item.pixmap().isNull():
             return
         zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
+        self._user_zoomed = True
         self.scale(zoom_factor, zoom_factor)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        # The standard "reset zoom" convention, and the only deliberate way
+        # to get back to fit-to-window now that resizeEvent no longer does
+        # it as an (accidental) side effect once the user has zoomed.
+        if event.button() == Qt.MouseButton.LeftButton and not self._crop_mode and not self._face_edit_mode:
+            self._user_zoomed = False
+            self.fit_to_window()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     # -- Face box overlay -------------------------------------------------
 

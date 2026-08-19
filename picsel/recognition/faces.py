@@ -59,17 +59,34 @@ class FaceCatalog:
         # same-named file in both folders -- common with camera default
         # naming -- would get a completely wrong cached entry).
         self._generation = 0
+        # Set by load() only when this folder's sidecar file *exists* but
+        # couldn't be read -- as opposed to legitimately not existing yet
+        # (a folder with no faces detected yet). Mirrors PersonGallery's
+        # load_error: save() has no "don't overwrite if empty" guard beyond
+        # the blanket `if not self._records: return` below, which would
+        # *not* protect a corrupted file once even one face gets detected
+        # fresh in this session. A caller should check this after every
+        # load() and warn before anything can save() over the unreadable
+        # file.
+        self.load_error: str | None = None
 
     def load(self, folder: Path) -> None:
         self.folder = Path(folder)
         self._records = {}
         self._generation += 1
+        self.load_error = None
         path = self._state_path()
         if not path.exists():
             return
         try:
             data = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            self.load_error = (
+                f"Could not read the existing face data at {path} ({exc}). "
+                f"Starting empty for this folder -- avoid confirming any "
+                f"face names until this is resolved, since doing so would "
+                f"save over (and permanently lose) the unreadable file."
+            )
             return
         for name, entries in data.items():
             self._records[name] = [
@@ -99,7 +116,13 @@ class FaceCatalog:
                 }
                 for record in records
             ]
-            for name, records in self._records.items()
+            # list(...) snapshots the dict before iterating -- see
+            # remap_person's comment: faces_for() can insert a new key from
+            # a background worker thread while this runs on the GUI thread.
+            # save() is the most frequently called of the four methods that
+            # touch self._records, so it's the one most likely to actually
+            # race in practice.
+            for name, records in list(self._records.items())
         }
         self._state_path().write_text(json.dumps(data, indent=2))
 
