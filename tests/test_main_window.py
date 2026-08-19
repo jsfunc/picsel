@@ -8,6 +8,7 @@ pytest.importorskip("torch")  # face recognition deps are optional; see requirem
 from PIL import Image  # noqa: E402
 from PySide6.QtWidgets import QDialog, QMessageBox  # noqa: E402
 
+import picsel.controllers.face_recognition_controller as face_ctl_module  # noqa: E402
 import picsel.main_window as mw_module  # noqa: E402
 from picsel import __version__  # noqa: E402
 from picsel.models import Status  # noqa: E402
@@ -23,7 +24,9 @@ def _drain_background_workers(main_window, qapp, timeout: float = 20.0) -> None:
     # (observed elsewhere this session starving a QThreadPool worker for 90+
     # seconds) -- poll with a plain sleep + processEvents instead.
     deadline = time.time() + timeout
-    while (main_window._pending_image_workers or main_window._pending_face_workers) and time.time() < deadline:
+    while (
+        main_window._pending_image_workers or main_window.face_ctl._pending_face_workers
+    ) and time.time() < deadline:
         time.sleep(0.05)
         qapp.processEvents()
 
@@ -141,15 +144,15 @@ def test_stale_metadata_result_is_discarded_after_rapid_navigation(main_window, 
 
 
 @pytest.mark.parametrize(
-    "save_method, target, error_marker",
+    "get_target, get_save_method, error_marker",
     [
-        ("_save_library_state", "library", "save_state"),
-        ("_save_face_catalog", "face_catalog", "save"),
-        ("_save_person_gallery", "person_gallery", "save"),
+        (lambda mw: mw.library, lambda mw: mw._save_library_state, "save_state"),
+        (lambda mw: mw.face_ctl.face_catalog, lambda mw: mw.face_ctl.save_face_catalog, "save"),
+        (lambda mw: mw.face_ctl.person_gallery, lambda mw: mw.face_ctl.save_person_gallery, "save"),
     ],
 )
 def test_save_helpers_report_oserror_instead_of_raising(
-    main_window, monkeypatch, save_method, target, error_marker
+    main_window, monkeypatch, get_target, get_save_method, error_marker
 ):
     # Regression test: every actual file operation elsewhere in main_window.py
     # (rename, save-as, culling) is wrapped in try/except OSError with a
@@ -160,14 +163,14 @@ def test_save_helpers_report_oserror_instead_of_raising(
     def failing_save(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(getattr(main_window, target), error_marker, failing_save)
+    monkeypatch.setattr(get_target(main_window), error_marker, failing_save)
 
     captured = []
     monkeypatch.setattr(
         QMessageBox, "warning", staticmethod(lambda *a, **k: captured.append(a) or QMessageBox.StandardButton.Ok)
     )
 
-    getattr(main_window, save_method)()  # must not raise
+    get_save_method(main_window)()  # must not raise
 
     assert captured, "expected a warning dialog instead of a raised OSError"
 
@@ -189,21 +192,21 @@ def test_face_filter_slider_is_debounced(main_window, tmp_path, qapp):
     main_window.side_tabs.setCurrentWidget(main_window.face_panel)
     _drain_background_workers(main_window, qapp)
 
-    assert main_window._face_filter_timer.isSingleShot()
-    assert not main_window._face_filter_timer.isActive()
+    assert main_window.face_ctl._face_filter_timer.isSingleShot()
+    assert not main_window.face_ctl._face_filter_timer.isActive()
 
     # Simulate a burst of slider ticks (one per pixel of drag) -- each one
     # should just (re)start the timer, not fire a redraw immediately.
     for value in range(10):
-        main_window._on_face_filter_changed(value / 10.0)
-        assert main_window._face_filter_timer.isActive()
+        main_window.face_ctl._on_face_filter_changed(value / 10.0)
+        assert main_window.face_ctl._face_filter_timer.isActive()
 
     deadline = time.time() + 2
-    while main_window._face_filter_timer.isActive() and time.time() < deadline:
+    while main_window.face_ctl._face_filter_timer.isActive() and time.time() < deadline:
         time.sleep(0.01)
         qapp.processEvents()
 
-    assert not main_window._face_filter_timer.isActive()  # fired exactly once, single-shot
+    assert not main_window.face_ctl._face_filter_timer.isActive()  # fired exactly once, single-shot
 
 
 def test_window_title_includes_the_version(main_window):
@@ -271,7 +274,7 @@ def test_apply_culling_move_invalidates_cached_face_data_for_the_moved_photo(
     main_window.open_folder(photos)
     moved_item = main_window.library.items[0]
     moved_name = moved_item.name
-    main_window.face_catalog.add_manual_face(moved_item.path, box=(5, 5, 20, 20))
+    main_window.face_ctl.face_catalog.add_manual_face(moved_item.path, box=(5, 5, 20, 20))
     main_window.library.set_status(0, Status.SELECTED)
 
     _auto_accept_apply_culling(monkeypatch)
@@ -280,7 +283,7 @@ def test_apply_culling_move_invalidates_cached_face_data_for_the_moved_photo(
     faces_path = photos / ".picsel_faces.json"
     if faces_path.exists():
         assert moved_name not in faces_path.read_text()
-    assert moved_name not in main_window.face_catalog._records
+    assert moved_name not in main_window.face_ctl.face_catalog._records
 
 
 def test_face_detection_gets_the_same_elevated_priority_as_image_loads(main_window, tmp_path, qapp, monkeypatch):
@@ -308,7 +311,7 @@ def test_face_detection_gets_the_same_elevated_priority_as_image_loads(main_wind
     main_window.side_tabs.setCurrentWidget(main_window.face_panel)
     _drain_background_workers(main_window, qapp)
 
-    face_calls = [call for call in calls if isinstance(call[0], mw_module.FaceDetectionWorker)]
+    face_calls = [call for call in calls if isinstance(call[0], face_ctl_module.FaceDetectionWorker)]
     assert face_calls, "no FaceDetectionWorker was started"
     assert all(priority == mw_module.IMAGE_LOAD_PRIORITY for _, priority in face_calls)
 

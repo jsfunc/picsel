@@ -30,14 +30,18 @@ def main_window(qapp, tmp_path):
     can ever read from or overwrite the real ~/.picsel/people.json.gz --
     MainWindow.__init__ takes no constructor parameters, so this is the only
     way to make it safe (see the "no injectable paths" finding from the
-    architecture review)."""
+    architecture review). PersonGallery itself is only imported inside
+    FaceRecognitionController now (main_window.py delegates face-recognition
+    state to it), so that's what needs patching, not main_window directly.
+    """
+    import picsel.controllers.face_recognition_controller as face_ctl_module
     import picsel.main_window as mw_module
 
-    original_defaults = mw_module.PersonGallery.__init__.__defaults__
-    mw_module.PersonGallery.__init__.__defaults__ = (tmp_path / "people.json.gz",)
+    original_defaults = face_ctl_module.PersonGallery.__init__.__defaults__
+    face_ctl_module.PersonGallery.__init__.__defaults__ = (tmp_path / "people.json.gz",)
     try:
         window = mw_module.MainWindow()
         yield window
     finally:
         window.close()
-        mw_module.PersonGallery.__init__.__defaults__ = original_defaults
+        face_ctl_module.PersonGallery.__init__.__defaults__ = original_defaults
