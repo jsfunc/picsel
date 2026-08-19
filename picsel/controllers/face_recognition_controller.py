@@ -14,12 +14,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtCore import QRect, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
 from picsel.recognition import FaceCatalog, PersonGallery
-from picsel.recognition.worker import FaceDetectionWorker
+from picsel.recognition.worker import FaceDetectionWorker, SaveWorker
 from picsel.views.face_panel import THUMBNAIL_SIZE, FaceEntry
 from picsel.views.manage_people_dialog import ManagePeopleDialog
 
@@ -42,6 +42,21 @@ class FaceRecognitionController:
             # the unreadable file with an empty gallery -- see
             # PersonGallery.load_error's docstring.
             QMessageBox.warning(self.parent_widget, "Face Gallery", self.person_gallery.load_error)
+
+        # A separate, single-threaded pool (not the shared self.thread_pool
+        # used for cancellable decode/detection work): person_gallery.save()
+        # / face_catalog.save() rewrite their *entire* file on every call,
+        # which can take hundreds of ms once a folder/gallery has any real
+        # size to it -- doing that on the UI thread made every single face
+        # confirmation feel laggy. maxThreadCount=1 keeps writes to the same
+        # file strictly ordered (no risk of an older snapshot's write
+        # finishing after a newer one's and clobbering it); waitForDone() on
+        # this pool (not .clear() -- a queued save must never be dropped) is
+        # how MainWindow.closeEvent guarantees the last write actually lands
+        # before the app exits.
+        self._save_thread_pool = QThreadPool()
+        self._save_thread_pool.setMaxThreadCount(1)
+        self._pending_save_workers: list[SaveWorker] = []
 
         self._pending_face_workers: list[FaceDetectionWorker] = []
         # The records for whichever photo is currently displayed, so the
@@ -92,16 +107,49 @@ class FaceRecognitionController:
             QMessageBox.warning(self.parent_widget, "Face Data", self.face_catalog.load_error)
 
     def save_face_catalog(self) -> None:
-        try:
-            self.face_catalog.save()
-        except OSError as exc:
-            QMessageBox.warning(self.parent_widget, "Save Failed", f"Could not save face data:\n{exc}")
+        # Snapshotting happens synchronously (prepare_save(), cheap -- a
+        # simple list comprehension); only the slow JSON-serialize+write
+        # step is deferred to _save_thread_pool. Safe even right before a
+        # folder switch: FaceCatalog.load() *reassigns* self._records rather
+        # than mutating it, so this snapshot is already immutable local data
+        # by the time that happens.
+        prepared = self.face_catalog.prepare_save()
+        if prepared is None:
+            return
+        path, data = prepared
+        worker = SaveWorker(self.face_catalog.write_payload, path, data)
+        # Keep a Python reference until it finishes -- same reasoning as
+        # ThumbnailList._pending_workers: with no reference held here, the
+        # local `worker` var goes out of scope the instant this method
+        # returns, letting `worker.signals` get garbage-collected before its
+        # queued cross-thread `finished` emit is actually delivered.
+        self._pending_save_workers.append(worker)
+        worker.signals.finished.connect(
+            lambda error, w=worker: self._on_save_finished(w, "Could not save face data", error)
+        )
+        self._save_thread_pool.start(worker)
 
     def save_person_gallery(self) -> None:
-        try:
-            self.person_gallery.save()
-        except OSError as exc:
-            QMessageBox.warning(self.parent_widget, "Save Failed", f"Could not save the people gallery:\n{exc}")
+        path, data = self.person_gallery.prepare_save()
+        worker = SaveWorker(self.person_gallery.write_payload, path, data)
+        self._pending_save_workers.append(worker)
+        worker.signals.finished.connect(
+            lambda error, w=worker: self._on_save_finished(w, "Could not save the people gallery", error)
+        )
+        self._save_thread_pool.start(worker)
+
+    def _on_save_finished(self, worker: SaveWorker, failure_context: str, error: str) -> None:
+        if worker in self._pending_save_workers:
+            self._pending_save_workers.remove(worker)
+        if error:
+            QMessageBox.warning(self.parent_widget, "Save Failed", f"{failure_context}:\n{error}")
+
+    def wait_for_pending_saves(self) -> None:
+        """Block until every queued/in-flight face-catalog or person-gallery
+        write has actually completed -- called by MainWindow.closeEvent right
+        before the app exits, so a save() triggered moments before closing
+        (e.g. the last face confirmed) can't get silently dropped."""
+        self._save_thread_pool.waitForDone()
 
     # -- Tab/navigation lifecycle, called by MainWindow ----------------------
 

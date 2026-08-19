@@ -147,12 +147,16 @@ def test_stale_metadata_result_is_discarded_after_rapid_navigation(main_window, 
     "get_target, get_save_method, error_marker",
     [
         (lambda mw: mw.library, lambda mw: mw._save_library_state, "save_state"),
-        (lambda mw: mw.face_ctl.face_catalog, lambda mw: mw.face_ctl.save_face_catalog, "save"),
-        (lambda mw: mw.face_ctl.person_gallery, lambda mw: mw.face_ctl.save_person_gallery, "save"),
+        # face_catalog/person_gallery saves run on a background thread now (see
+        # FaceRecognitionController._save_thread_pool) -- write_payload is the
+        # part that actually touches disk, so that's what needs to fail here,
+        # not save() (which now only does the cheap, synchronous snapshot).
+        (lambda mw: mw.face_ctl.face_catalog, lambda mw: mw.face_ctl.save_face_catalog, "write_payload"),
+        (lambda mw: mw.face_ctl.person_gallery, lambda mw: mw.face_ctl.save_person_gallery, "write_payload"),
     ],
 )
 def test_save_helpers_report_oserror_instead_of_raising(
-    main_window, monkeypatch, get_target, get_save_method, error_marker
+    main_window, tmp_path, monkeypatch, qapp, get_target, get_save_method, error_marker
 ):
     # Regression test: every actual file operation elsewhere in main_window.py
     # (rename, save-as, culling) is wrapped in try/except OSError with a
@@ -160,6 +164,17 @@ def test_save_helpers_report_oserror_instead_of_raising(
     # face cache, person gallery) previously weren't, so a folder on
     # removable/network media going unwritable mid-session could raise
     # straight out of an ordinary keyboard shortcut.
+
+    # face_catalog.prepare_save() short-circuits (no write at all) unless a
+    # folder is loaded with at least one cached record -- give it that, so
+    # write_payload actually gets reached for that row's monkeypatch below
+    # (harmless setup for the other two rows).
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos)
+    main_window.open_folder(photos)
+    main_window.face_ctl.face_catalog.add_manual_face(main_window.library.items[0].path, box=(1, 1, 10, 10))
+
     def failing_save(*args, **kwargs):
         raise OSError("disk full")
 
@@ -172,7 +187,66 @@ def test_save_helpers_report_oserror_instead_of_raising(
 
     get_save_method(main_window)()  # must not raise
 
+    # The face_catalog/person_gallery cases dispatch to a background thread
+    # and the warning arrives via a queued cross-thread signal -- give the
+    # event loop a chance to deliver it (a no-op wait for the synchronous
+    # library-save case, since captured is already non-empty by then).
+    deadline = time.time() + 5
+    while not captured and time.time() < deadline:
+        time.sleep(0.02)
+        qapp.processEvents()
+
     assert captured, "expected a warning dialog instead of a raised OSError"
+
+
+def test_face_catalog_and_gallery_saves_do_not_block_the_ui_thread(main_window, tmp_path, qapp):
+    # Regression test: face_catalog.save()/person_gallery.save() used to
+    # rewrite their entire file synchronously on the UI thread on every
+    # single call -- confirming one face name felt laggy (measured ~0.6s for
+    # a moderately-used folder/gallery) because the click blocked on disk
+    # I/O + JSON serialization. save_face_catalog()/save_person_gallery()
+    # now only do a cheap synchronous snapshot and defer the slow part to a
+    # background thread -- verified here by making the write itself
+    # artificially slow and confirming the calling method still returns
+    # almost immediately, then confirming the data actually lands on disk
+    # once wait_for_pending_saves() returns.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos)
+    main_window.open_folder(photos)
+    main_window.face_ctl.face_catalog.add_manual_face(main_window.library.items[0].path, box=(1, 1, 10, 10))
+    main_window.face_ctl.person_gallery.add_person("Alice")
+
+    real_write_faces = main_window.face_ctl.face_catalog.write_payload
+    real_write_gallery = main_window.face_ctl.person_gallery.write_payload
+
+    def slow_write(write_fn):
+        def wrapped(path, data):
+            time.sleep(0.3)
+            write_fn(path, data)
+
+        return wrapped
+
+    main_window.face_ctl.face_catalog.write_payload = slow_write(real_write_faces)
+    main_window.face_ctl.person_gallery.write_payload = slow_write(real_write_gallery)
+
+    t0 = time.time()
+    main_window.face_ctl.save_face_catalog()
+    main_window.face_ctl.save_person_gallery()
+    elapsed = time.time() - t0
+
+    assert elapsed < 0.1, f"save_face_catalog()/save_person_gallery() blocked for {elapsed:.2f}s -- should return immediately"
+
+    main_window.face_ctl.wait_for_pending_saves()
+
+    reloaded_catalog_json = main_window.face_ctl.face_catalog._state_path().read_text()
+    assert "person_id" in reloaded_catalog_json  # face_catalog.save()'s format landed on disk
+
+    import gzip
+    import json
+
+    reloaded_gallery = json.loads(gzip.decompress(main_window.face_ctl.person_gallery.path.read_bytes()))
+    assert any(p["name"] == "Alice" for p in reloaded_gallery["people"])
 
 
 def test_face_filter_slider_is_debounced(main_window, tmp_path, qapp):

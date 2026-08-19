@@ -99,22 +99,36 @@ class PersonGallery:
         ]
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.export_to(self.path)
+        path, data = self.prepare_save()
+        self.write_payload(path, data)
+
+    def prepare_save(self) -> tuple[Path, dict]:
+        """Synchronously snapshot the current people/embeddings into whatever
+        save() would write, without doing the actual (slow) gzip+JSON
+        serialization or disk write -- the split point that lets a caller
+        (see FaceRecognitionController) capture a consistent, fully
+        up-to-date snapshot on the calling thread, then defer the expensive
+        part to a background thread."""
+        return self.path, self._snapshot()
+
+    def _snapshot(self) -> dict:
+        return {
+            "people": [
+                {"id": p.id, "name": p.name, "embeddings": [e.tolist() for e in p.embeddings]}
+                for p in self.people
+            ]
+        }
 
     def export_to(self, path: Path) -> None:
         """Write this whole gallery, gzip-compressed, to an arbitrary path --
         `save()`'s own mechanism, also exposed directly for the user to
         export a portable copy (e.g. to back up or move to another machine).
         """
-        path = Path(path)
+        self.write_payload(Path(path), self._snapshot())
+
+    @staticmethod
+    def write_payload(path: Path, data: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "people": [
-                {"id": p.id, "name": p.name, "embeddings": [e.tolist() for e in p.embeddings]}
-                for p in self.people
-            ]
-        }
         atomic_write_bytes(path, gzip.compress(json.dumps(data).encode("utf-8")))
 
     def import_from(self, path: Path) -> int:

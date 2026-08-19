@@ -102,10 +102,25 @@ class FaceCatalog:
             ]
 
     def save(self) -> None:
+        prepared = self.prepare_save()
+        if prepared is None:
+            return
+        path, data = prepared
+        self.write_payload(path, data)
+
+    def prepare_save(self) -> tuple[Path, dict] | None:
+        """Synchronously snapshot the current records into whatever save()
+        would write, without doing the actual (slow) JSON serialization or
+        disk write -- the split point that lets a caller (see
+        FaceRecognitionController) capture a consistent, fully up-to-date
+        snapshot on the calling thread, then defer the expensive part to a
+        background thread. Safe against a later folder switch, since
+        `load()` *reassigns* self._records/self.folder rather than mutating
+        them in place -- this snapshot doesn't see that reassignment."""
         if self.folder is None:
-            return
+            return None
         if not self._records:
-            return
+            return None
         data = {
             name: [
                 {
@@ -125,7 +140,11 @@ class FaceCatalog:
             # race in practice.
             for name, records in list(self._records.items())
         }
-        atomic_write_bytes(self._state_path(), json.dumps(data, indent=2).encode("utf-8"))
+        return self._state_path(), data
+
+    @staticmethod
+    def write_payload(path: Path, data: dict) -> None:
+        atomic_write_bytes(path, json.dumps(data, indent=2).encode("utf-8"))
 
     def _state_path(self) -> Path:
         assert self.folder is not None

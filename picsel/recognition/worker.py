@@ -41,6 +41,36 @@ class FaceDetectionWorker(QRunnable):
         self.signals.finished.emit(self.path, records, error)
 
 
+class SaveSignals(QObject):
+    finished = Signal(str)  # error message ("" if ok)
+
+
+class SaveWorker(QRunnable):
+    """Runs a prepared (path, data) write off the UI thread. The caller must
+    have already synchronously captured a consistent snapshot via
+    `FaceCatalog.prepare_save()`/`PersonGallery.prepare_save()` -- only the
+    slow serialize+compress+write step happens here, so this is safe to run
+    well after the snapshot was taken (a folder switch or further labeling
+    on the UI thread in the meantime can't corrupt or race against what
+    actually gets written, since this worker never touches the live
+    catalog/gallery object at all)."""
+
+    def __init__(self, write_payload, path: Path, data: dict) -> None:
+        super().__init__()
+        self._write_payload = write_payload
+        self._path = path
+        self._data = data
+        self.signals = SaveSignals()
+
+    def run(self) -> None:
+        try:
+            self._write_payload(self._path, self._data)
+            error = ""
+        except OSError as exc:
+            error = str(exc)
+        self.signals.finished.emit(error)
+
+
 class FolderSearchSignals(QObject):
     photo_processed = Signal(list, int, int)  # list[SearchHit] found in this photo, photos done, total
     finished = Signal(str, list)  # fatal error message ("" if ok), list[Path] of photos that failed individually

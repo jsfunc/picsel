@@ -847,6 +847,12 @@ class MainWindow(QMainWindow):
         self._save_library_state()
         if RECOGNITION_AVAILABLE:
             self.face_ctl.save_face_catalog()
+            # face_ctl's saves run on their own background pool now (see
+            # FaceRecognitionController._save_thread_pool) -- wait for it
+            # explicitly, since the shared _thread_pool.clear() below would
+            # otherwise have no effect on it either way (it's a separate
+            # pool), and a queued-but-not-yet-run save must never be dropped.
+            self.face_ctl.wait_for_pending_saves()
         # Thumbnail and image-load workers run on the shared global thread pool.
         # If any are still running when Qt starts tearing down, they crash trying
         # to emit `finished` on a signals object whose C++ side is already gone.
