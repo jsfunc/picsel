@@ -46,39 +46,43 @@ def _reraise_decompression_bomb_clearly(path: Path, exc: Image.DecompressionBomb
     raise OSError(f"{path.name} is unusually large and was skipped for safety ({exc})") from exc
 
 
-def generate_thumbnail(path: Path, size: tuple[int, int] = DEFAULT_THUMBNAIL_SIZE) -> QImage:
-    """Decode an image file and return a thumbnail-sized QImage (RGB888).
+def _decode_with_exif_orientation(path: Path, prepare) -> QImage:
+    """Shared pipeline behind generate_thumbnail() and load_qimage(), which
+    differ only in `prepare` (how much of the image gets decoded before EXIF
+    orientation is applied):
 
-    Downscales before transposing for EXIF orientation, not after: for
-    JPEGs, `Image.thumbnail()` uses a fast, approximate `.draft()` decode
-    that skips most of the actual pixel work -- but only if the image
-    hasn't been fully decoded yet. `ImageOps.exif_transpose()` calls
-    `.load()` unconditionally, forcing a full-resolution decode, so doing
-    it first would defeat draft mode entirely and pay full price on every
-    thumbnail. This ordering is only correct because `size` is always
+    generate_thumbnail() downscales before transposing for EXIF orientation,
+    not after: for JPEGs, `Image.thumbnail()` uses a fast, approximate
+    `.draft()` decode that skips most of the actual pixel work -- but only
+    if the image hasn't been fully decoded yet. `ImageOps.exif_transpose()`
+    calls `.load()` unconditionally, forcing a full-resolution decode, so
+    doing it first would defeat draft mode entirely and pay full price on
+    every thumbnail. This ordering is only correct because `size` is always
     square in this app (`DEFAULT_THUMBNAIL_SIZE`) -- a square box's
     fit-to-size scale is the same before or after a 90/180/270 degree
     rotation, so which happens first doesn't change the result. It would
     *not* be safe to reorder like this for a non-square target size.
+
+    load_qimage() just needs a full decode (`.load()`) before transposing,
+    since there's no downscale to protect the draft-mode fast path for.
     """
     try:
         with Image.open(path) as img:
-            img.thumbnail(size)
+            prepare(img)
             img = ImageOps.exif_transpose(img)
             return pil_to_qimage(img)
     except Image.DecompressionBombError as exc:
         _reraise_decompression_bomb_clearly(path, exc)
+
+
+def generate_thumbnail(path: Path, size: tuple[int, int] = DEFAULT_THUMBNAIL_SIZE) -> QImage:
+    """Decode an image file and return a thumbnail-sized QImage (RGB888)."""
+    return _decode_with_exif_orientation(path, lambda img: img.thumbnail(size))
 
 
 def load_qimage(path: Path) -> QImage:
     """Decode an image file at full resolution, applying EXIF orientation."""
-    try:
-        with Image.open(path) as img:
-            img.load()
-            img = ImageOps.exif_transpose(img)
-            return pil_to_qimage(img)
-    except Image.DecompressionBombError as exc:
-        _reraise_decompression_bomb_clearly(path, exc)
+    return _decode_with_exif_orientation(path, lambda img: img.load())
 
 
 class ThumbnailSignals(QObject):
