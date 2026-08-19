@@ -281,3 +281,33 @@ def test_apply_culling_move_invalidates_cached_face_data_for_the_moved_photo(
     if faces_path.exists():
         assert moved_name not in faces_path.read_text()
     assert moved_name not in main_window.face_catalog._records
+
+
+def test_face_detection_gets_the_same_elevated_priority_as_image_loads(main_window, tmp_path, qapp, monkeypatch):
+    # Regression test: the visible full-image load is deliberately given
+    # elevated thread-pool priority over background thumbnail decoding, so
+    # the photo you're looking at doesn't wait behind a large folder's
+    # thumbnail queue -- face detection didn't get the same treatment, so
+    # switching to the Face Recognition tab right after opening a large
+    # folder could queue detection for the current photo behind thousands
+    # of pending thumbnail jobs.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos)
+    main_window.open_folder(photos)
+
+    calls = []
+    real_start = main_window._thread_pool.start
+
+    def spying_start(worker, priority=0):
+        calls.append((worker, priority))
+        return real_start(worker, priority)
+
+    monkeypatch.setattr(main_window._thread_pool, "start", spying_start)
+
+    main_window.side_tabs.setCurrentWidget(main_window.face_panel)
+    _drain_background_workers(main_window, qapp)
+
+    face_calls = [call for call in calls if isinstance(call[0], mw_module.FaceDetectionWorker)]
+    assert face_calls, "no FaceDetectionWorker was started"
+    assert all(priority == mw_module.IMAGE_LOAD_PRIORITY for _, priority in face_calls)

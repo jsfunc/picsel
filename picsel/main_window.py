@@ -1250,7 +1250,14 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(
             lambda path, records, error, w=worker: self._on_faces_detected(path, records, error, w)
         )
-        self._thread_pool.start(worker)
+        # Same elevated priority as the visible full-image load (see
+        # IMAGE_LOAD_PRIORITY) -- this is just as much "what the user is
+        # looking at right now" as the image itself, and without it,
+        # switching to the Face Recognition tab right after opening a large
+        # never-before-processed folder could queue behind thousands of
+        # pending thumbnail jobs before detection for the current photo
+        # even starts.
+        self._thread_pool.start(worker, IMAGE_LOAD_PRIORITY)
 
     def _on_faces_detected(self, path: Path, records: list, error: str, worker) -> None:
         if worker in self._pending_face_workers:
