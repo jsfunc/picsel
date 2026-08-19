@@ -179,6 +179,11 @@ class MainWindow(QMainWindow):
             )
             self.side_tabs.addTab(self.search_panel, "Search by Name")
             self.search_panel.photo_chosen.connect(self._on_search_photo_chosen)
+            # A merge/forget in Manage People can remove a Person that an
+            # in-flight search holds a reference to -- routed through
+            # MainWindow (not FaceRecognitionController directly) since it's
+            # the one place that knows about both controllers and SearchPanel.
+            self.face_panel.manage_people_requested.connect(self._on_manage_people_requested)
 
         self._build_menu()
         self._build_shortcuts()
@@ -709,6 +714,11 @@ class MainWindow(QMainWindow):
         if enabled:
             self.edit_ctl.exit_crop_mode()
         self.face_ctl.set_face_edit_mode(enabled)
+
+    def _on_manage_people_requested(self) -> None:
+        removed_ids = self.face_ctl.show_manage_people_dialog()
+        if removed_ids:
+            self.search_panel.cancel_if_targeting(removed_ids)
 
     def _on_search_photo_chosen(self, path: Path) -> None:
         index = next((i for i, item in enumerate(self.library.items) if item.path == path), None)

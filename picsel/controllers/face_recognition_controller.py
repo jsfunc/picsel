@@ -70,7 +70,12 @@ class FaceRecognitionController:
         # below itself.
         face_panel.name_confirmed.connect(self._on_face_name_confirmed)
         face_panel.remove_requested.connect(self._on_face_remove_requested)
-        face_panel.manage_people_requested.connect(self.show_manage_people_dialog)
+        # manage_people_requested is deliberately NOT connected here: a
+        # merge/forget can remove a Person that a SearchPanel scan (a
+        # separate feature this controller knows nothing about) currently
+        # holds a reference to, so MainWindow connects it to a wrapper that
+        # calls show_manage_people_dialog() below and then cancels any
+        # in-flight search targeting a removed person.
         face_panel.forget_all_requested.connect(self.forget_all)
         viewer.face_box_added.connect(self._on_face_box_added)
         viewer.face_box_dismiss_requested.connect(self._on_face_remove_requested)
@@ -268,7 +273,10 @@ class FaceRecognitionController:
         self.save_face_catalog()
         self._update_face_display()
 
-    def show_manage_people_dialog(self) -> None:
+    def show_manage_people_dialog(self) -> set[str]:
+        """Returns the ids of any people removed by a merge or forget, so a
+        caller that needs to react to a Person disappearing (e.g. cancel a
+        SearchPanel scan holding a reference to it) can do so."""
         dialog = ManagePeopleDialog(self.person_gallery, self.parent_widget)
         dialog.exec()
         # Only the currently-loaded folder's face records can be updated
@@ -276,13 +284,15 @@ class FaceRecognitionController:
         # open right now will just show as unconfirmed next time that folder
         # is opened (for a merge, its correct suggestion should resurface on
         # its own, since the same embeddings now live under the kept person).
-        if dialog.merges or dialog.forgotten_ids:
+        removed_ids = {removed_id for removed_id, _kept_id in dialog.merges} | set(dialog.forgotten_ids)
+        if removed_ids:
             for removed_id, kept_id in dialog.merges:
                 self.face_catalog.remap_person(removed_id, kept_id)
             for forgotten_id in dialog.forgotten_ids:
                 self.face_catalog.forget_person(forgotten_id)
             self.save_face_catalog()
             self._update_face_display()
+        return removed_ids
 
     def forget_all(self) -> None:
         if not self.person_gallery.people:

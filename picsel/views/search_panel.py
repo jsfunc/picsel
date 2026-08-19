@@ -138,6 +138,15 @@ class SearchPanel(QWidget):
         worker.signals.finished.connect(self._on_search_finished)
         self.thread_pool.start(worker)
 
+    def cancel_if_targeting(self, person_ids: set) -> None:
+        """Cancel the in-flight search, if any, if it's looking for one of
+        the given person ids -- called when a merge/forget in Manage People
+        removes a Person this scan holds a direct reference to (searching
+        would otherwise keep running against a Person no longer in the
+        gallery, silently going quiet instead of erroring)."""
+        if self._worker is not None and self._worker.person.id in person_ids:
+            self._on_cancel_clicked()
+
     def _on_cancel_clicked(self) -> None:
         if self._worker is None:
             return
