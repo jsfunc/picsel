@@ -810,6 +810,8 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.critical(self, "Open Folder Failed", f"Could not read {folder}:\n{exc}")
             return
+        if self.library.load_error:
+            QMessageBox.warning(self, "Ratings/Status", self.library.load_error)
         if RECOGNITION_AVAILABLE:
             self.face_catalog.load(folder)
             if self.face_catalog.load_error:
@@ -1618,6 +1620,8 @@ class MainWindow(QMainWindow):
             except OSError as exc:
                 QMessageBox.critical(self, "Apply Culling", f"Photos were moved, but reloading {folder} failed:\n{exc}")
                 return
+            if self.library.load_error:
+                QMessageBox.warning(self, "Ratings/Status", self.library.load_error)
             if RECOGNITION_AVAILABLE:
                 # Reload rather than keep the in-memory cache: some cached
                 # entries now refer to photos that just moved to selected/

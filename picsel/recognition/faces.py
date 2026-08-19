@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
+from picsel.persistence import atomic_write_bytes
 from picsel.recognition.detector import DEFAULT_MIN_CONFIDENCE, FaceDetection, detect_faces, load_for_detection
 from picsel.recognition.embedder import embed_faces
 
@@ -124,7 +125,7 @@ class FaceCatalog:
             # race in practice.
             for name, records in list(self._records.items())
         }
-        self._state_path().write_text(json.dumps(data, indent=2))
+        atomic_write_bytes(self._state_path(), json.dumps(data, indent=2).encode("utf-8"))
 
     def _state_path(self) -> Path:
         assert self.folder is not None

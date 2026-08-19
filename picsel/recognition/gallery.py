@@ -15,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
+from picsel.persistence import atomic_write_bytes
+
 DEFAULT_GALLERY_PATH = Path.home() / ".picsel" / "people.json.gz"
 
 # How many of the single nearest embedding *samples* (across all people, not
@@ -113,7 +115,7 @@ class PersonGallery:
                 for p in self.people
             ]
         }
-        path.write_bytes(gzip.compress(json.dumps(data).encode("utf-8")))
+        atomic_write_bytes(path, gzip.compress(json.dumps(data).encode("utf-8")))
 
     def import_from(self, path: Path) -> int:
         """Merge people from a gallery file exported by `export_to` (or this

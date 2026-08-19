@@ -291,6 +291,39 @@ def test_save_writes_gzip_compressed_json(tmp_path):
     assert decompressed["people"][0]["name"] == "Alice"
 
 
+def test_save_writes_atomically(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=path)
+    gallery.add_person("Alice")
+    gallery.save()
+    original_bytes = path.read_bytes()
+
+    gallery.add_person("Bob")
+
+    # Writes garbage to whatever file is actually targeted, then fails --
+    # simulating a real partial/failed write. A mock that merely raises
+    # without writing anything would trivially "pass" even for a
+    # non-atomic implementation, since no bytes would ever land anywhere
+    # either way -- this is the detail that actually distinguishes them.
+    real_write_bytes = Path.write_bytes
+
+    def failing_write_bytes(self, data):
+        real_write_bytes(self, b"CORRUPTED-PARTIAL-WRITE")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", failing_write_bytes)
+
+    with pytest.raises(OSError):
+        gallery.save()
+
+    # The original must be untouched -- save() writes to a temp file first
+    # and only replaces the original once the write fully succeeds.
+    assert path.read_bytes() == original_bytes
+    assert not list(tmp_path.glob(".picsel_write_*"))
+
+
 def test_load_migrates_from_legacy_uncompressed_file_without_deleting_it(tmp_path):
     import json
 

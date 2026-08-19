@@ -290,6 +290,41 @@ def test_save_and_load_roundtrip(tmp_path):
     assert reloaded_record.embedding.shape == record.embedding.shape
 
 
+def test_save_writes_atomically(tmp_path, monkeypatch):
+    path = tmp_path / "photo.jpg"
+    _make_image(path)
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    catalog.add_manual_face(path, box=(20, 20, 100, 100))
+    catalog.save()
+    state_path = tmp_path / FACES_FILENAME
+    original_bytes = state_path.read_bytes()
+
+    catalog.add_manual_face(path, box=(30, 30, 60, 60))
+
+    # Writes garbage to whatever file is actually targeted, then fails --
+    # simulating a real partial/failed write. A mock that merely raises
+    # without writing anything would trivially "pass" even for a
+    # non-atomic implementation, since no bytes would ever land anywhere
+    # either way -- this is the detail that actually distinguishes them.
+    real_write_bytes = Path.write_bytes
+
+    def failing_write_bytes(self, data):
+        real_write_bytes(self, b"CORRUPTED-PARTIAL-WRITE")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", failing_write_bytes)
+
+    with pytest.raises(OSError):
+        catalog.save()
+
+    # The original must be untouched -- save() writes to a temp file first
+    # and only replaces the original once the write fully succeeds.
+    assert state_path.read_bytes() == original_bytes
+    assert not list(tmp_path.glob(".picsel_write_*"))
+
+
 def test_remap_person_updates_matching_records_only(tmp_path):
     path = tmp_path / "photo.jpg"
     _make_image(path)

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from picsel.models.image_item import ImageItem, Status
+from picsel.persistence import atomic_write_bytes
 
 SUPPORTED_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp",
@@ -24,6 +25,15 @@ class ImageLibrary:
         self.items: list[ImageItem] = []
         self.current_index: int = 0
         self.renamed_names: dict[str, int] = {}
+        # Set by _load_state() only when this folder's state file *exists*
+        # but couldn't be read -- as opposed to legitimately not existing
+        # yet (a folder never opened in picSel before). Mirrors
+        # PersonGallery/FaceCatalog's load_error: without this, a corrupted
+        # state file silently reset every photo's rating/status to
+        # "unrated" with no warning, and the next save_state() would
+        # permanently overwrite the (maybe still partially recoverable)
+        # original file with that empty state.
+        self.load_error: str | None = None
 
     def load(self, folder: Path) -> None:
         folder = Path(folder)
@@ -45,12 +55,25 @@ class ImageLibrary:
         return self.folder / STATE_FILENAME
 
     def _load_state(self) -> None:
+        self.load_error = None
         state_path = self._state_path()
         if not state_path.exists():
             return
         try:
             data = json.loads(state_path.read_text())
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            self.load_error = (
+                f"Could not read the existing ratings/status at {state_path} ({exc}). "
+                f"Starting unrated -- avoid marking/rating photos until this is resolved, "
+                f"since doing so would save over (and permanently lose) the unreadable file."
+            )
+            return
+        if not isinstance(data, dict):
+            self.load_error = (
+                f"The existing ratings/status file at {state_path} isn't in the expected "
+                f"format. Starting unrated -- avoid marking/rating photos until this is "
+                f"resolved, since doing so would save over (and permanently lose) the file."
+            )
             return
 
         renamed_names = data.get(RENAMED_NAMES_KEY)
@@ -83,7 +106,7 @@ class ImageLibrary:
         }
         if self.renamed_names:
             data[RENAMED_NAMES_KEY] = self.renamed_names
-        self._state_path().write_text(json.dumps(data, indent=2))
+        atomic_write_bytes(self._state_path(), json.dumps(data, indent=2).encode("utf-8"))
 
     def register_name_use(self, name: str) -> int:
         """Record a use of `name`, returning the next unused sequence number for it."""
