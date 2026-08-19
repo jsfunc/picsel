@@ -34,8 +34,22 @@ def rename_with_sequence(item: ImageItem, name: str, number: int) -> Path:
     Updates `item.path` in place and returns the new path.
     """
     new_name = f"{name}{number:03d}{item.path.suffix}"
-    destination = unique_path(item.path.parent / new_name)
-    item.path.rename(destination)
+    # Staged through a unique temp name first, same reasoning as
+    # renumber_by_creation_time/rename_by_creation_date: on a
+    # case-insensitive filesystem (default macOS, Windows), Path.exists()
+    # can't tell "a different file already has this name" apart from "this
+    # is the same file under a different case" -- e.g. renaming
+    # photo001.jpg to PHOTO001.jpg would otherwise see the destination as
+    # already existing (itself) and append " (1)" instead of doing the
+    # plain case-only rename the user asked for. Moving the source out of
+    # the way first means the target name is only ever checked against
+    # *other* files.
+    temp = unique_path(item.path.with_name(f".picsel_rename_{uuid.uuid4().hex}{item.path.suffix}"))
+    item.path.rename(temp)
+    item.path = temp  # the file is here now regardless of what happens next -- never leave
+    # item.path pointing at the (now nonexistent) original if the second rename below fails.
+    destination = unique_path(temp.with_name(new_name))
+    temp.rename(destination)
     item.path = destination
     return destination
 

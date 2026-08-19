@@ -170,6 +170,40 @@ def test_save_helpers_report_oserror_instead_of_raising(
     assert captured, "expected a warning dialog instead of a raised OSError"
 
 
+def test_face_filter_slider_is_debounced(main_window, tmp_path, qapp):
+    # Regression test: the face-confidence threshold slider previously
+    # rebuilt every visible face row and its full ranked person dropdown on
+    # every single pixel of drag -- unlike the structurally similar edit
+    # adjustment sliders, which are deliberately debounced via a QTimer to
+    # avoid exactly this. _update_face_display() is wired up in __init__
+    # (before this test can intercept it), so the debounce itself -- not
+    # the downstream call -- is what's checked here: a burst of ticks must
+    # coalesce into the timer firing once, single-shot, not redraw inline
+    # on every tick.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos)
+    main_window.open_folder(photos)
+    main_window.side_tabs.setCurrentWidget(main_window.face_panel)
+    _drain_background_workers(main_window, qapp)
+
+    assert main_window._face_filter_timer.isSingleShot()
+    assert not main_window._face_filter_timer.isActive()
+
+    # Simulate a burst of slider ticks (one per pixel of drag) -- each one
+    # should just (re)start the timer, not fire a redraw immediately.
+    for value in range(10):
+        main_window._on_face_filter_changed(value / 10.0)
+        assert main_window._face_filter_timer.isActive()
+
+    deadline = time.time() + 2
+    while main_window._face_filter_timer.isActive() and time.time() < deadline:
+        time.sleep(0.01)
+        qapp.processEvents()
+
+    assert not main_window._face_filter_timer.isActive()  # fired exactly once, single-shot
+
+
 def test_window_title_includes_the_version(main_window):
     assert main_window.windowTitle() == f"picSel {__version__}"
 

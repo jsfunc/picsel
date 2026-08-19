@@ -61,6 +61,37 @@ def test_rename_with_sequence(tmp_path):
     assert item.path == new_path
 
 
+def test_rename_with_sequence_handles_case_only_rename_on_case_insensitive_filesystem(tmp_path, monkeypatch):
+    # This machine's filesystem is case-sensitive, so simulate a
+    # case-insensitive one (default macOS/Windows) by making Path.exists()
+    # match case-insensitively against whatever's actually on disk --
+    # exactly the behavior that made a naive unique_path(destination) check
+    # see the file being renamed as "already existing" under its new
+    # casing, appending " (1)" instead of doing the plain rename.
+    path = tmp_path / "photo001.jpg"
+    _make_image(path)
+    item = ImageItem(path=path)
+
+    real_exists = Path.exists
+
+    def case_insensitive_exists(self, *args, **kwargs):
+        if real_exists(self, *args, **kwargs):
+            return True
+        try:
+            names_on_disk = {p.name.lower() for p in self.parent.iterdir()}
+        except OSError:
+            return False
+        return self.name.lower() in names_on_disk
+
+    monkeypatch.setattr(Path, "exists", case_insensitive_exists)
+
+    new_path = rename_with_sequence(item, "PHOTO", 1)
+
+    assert new_path.name == "PHOTO001.jpg"  # not "PHOTO001 (1).jpg"
+    assert item.path == new_path
+    assert new_path.exists()
+
+
 def test_apply_culling_moves_selected_and_rejected(tmp_path):
     _make_image(tmp_path / "a.jpg")
     _make_image(tmp_path / "b.jpg")

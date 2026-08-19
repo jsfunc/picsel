@@ -597,6 +597,15 @@ class MainWindow(QMainWindow):
             self._current_visible_face_records: list = []  # index-addressable, matches viewer's box order
             self._current_qimage: QImage | None = None  # for cropping face thumbnails
             self._current_qimage_path: Path | None = None
+            # Coalesces bursts of threshold-slider ticks (one per pixel of
+            # drag) into a bounded redraw rate, same reasoning as
+            # _adjustment_timer below -- _update_face_display() rebuilds
+            # every visible face row and its full ranked person dropdown,
+            # which otherwise reran on every single tick.
+            self._face_filter_timer = QTimer(self)
+            self._face_filter_timer.setSingleShot(True)
+            self._face_filter_timer.setInterval(30)
+            self._face_filter_timer.timeout.connect(self._update_face_display)
 
         self._pending_adjustments: tuple[float, float, float] | None = None
         self._adjustment_timer = QTimer(self)
@@ -1256,8 +1265,12 @@ class MainWindow(QMainWindow):
 
     def _on_face_filter_changed(self, _value: float) -> None:
         # Pure re-filter over already-cached records -- never touches
-        # FaceCatalog or re-runs the model, so it's safe on every slider tick.
-        self._update_face_display()
+        # FaceCatalog or re-runs the model, so it's safe to run on every
+        # slider tick correctness-wise. Still debounced (see
+        # _face_filter_timer) since the redraw itself -- rebuilding every
+        # visible face row and its full ranked person dropdown -- isn't
+        # free, and doing that on every pixel of drag is wasted work.
+        self._face_filter_timer.start()
 
     def _on_face_edit_mode_toggled(self, enabled: bool) -> None:
         if enabled:

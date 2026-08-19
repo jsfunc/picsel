@@ -7,7 +7,7 @@ current EditSession and refreshes the preview.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -46,6 +46,19 @@ class EditPanel(QWidget):
         super().__init__(parent)
         self._image_size = (0, 0)
         self._lock_aspect = True
+
+        # Commits an adjustment to undo history after a pause in slider
+        # activity, regardless of input method -- sliderReleased (below)
+        # only fires after a mouse-drag release, so arrow keys/Page Up-Down/
+        # Home-End (fully valid QSlider interactions, and the only path for
+        # keyboard-only or assistive-tech use) previously updated the live
+        # preview but never landed in undo history. commit_adjustments() is
+        # idempotent (a no-op once already committed), so this firing after
+        # sliderReleased already committed is harmless.
+        self._commit_timer = QTimer(self)
+        self._commit_timer.setSingleShot(True)
+        self._commit_timer.setInterval(500)
+        self._commit_timer.timeout.connect(self.adjustments_committed)
 
         layout = QVBoxLayout(self)
 
@@ -106,8 +119,12 @@ class EditPanel(QWidget):
         slider.setRange(*SLIDER_RANGE)
         slider.setValue(SLIDER_DEFAULT)
         slider.valueChanged.connect(self._emit_adjustments)
-        slider.sliderReleased.connect(self.adjustments_committed)
+        slider.sliderReleased.connect(self._on_slider_released)
         return slider
+
+    def _on_slider_released(self) -> None:
+        self._commit_timer.stop()  # already committing now, no need for the fallback timer to fire too
+        self.adjustments_committed.emit()
 
     def _emit_adjustments(self) -> None:
         self.adjustments_changed.emit(
@@ -115,6 +132,7 @@ class EditPanel(QWidget):
             self.contrast_slider.value() / 100.0,
             self.saturation_slider.value() / 100.0,
         )
+        self._commit_timer.start()
 
     def reset_adjustment_sliders(self) -> None:
         for slider in (self.brightness_slider, self.contrast_slider, self.saturation_slider):
