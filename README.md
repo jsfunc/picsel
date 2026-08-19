@@ -16,6 +16,18 @@ keyboard, without leaving a single window.
   file.
 - **Apply culling** — move or copy selected/rejected photos into
   `selected/` and `rejected/` subfolders in one step.
+- **Face recognition** *(optional, see [Installation](#installation))* —
+  detect faces in a photo and suggest who they are, entirely offline (no
+  cloud APIs, nothing ever leaves your machine). Suggestions are ranked by
+  confidence, shown color-coded (green = likely, red = unlikely) rather than
+  a hard yes/no cutoff — confirm one with a click and it strengthens future
+  suggestions for that person. Includes manual add/remove of face boxes for
+  anything the detector misses or gets wrong, a Manage People dialog
+  (rename, merge duplicates, forget), gallery import/export to move your
+  identities to another machine, and a progressive Search by Name that finds
+  every photo of someone across the whole folder. See
+  [docs/face_recognition.html](docs/face_recognition.html) for how the
+  detection/recognition pipeline actually works.
 - **Rename**
   - Rename the current photo to `<name><sequence number>.<ext>`.
   - Renumber an existing `<name><digits>.<ext>` sequence so numbering matches
@@ -34,6 +46,28 @@ Requires Python 3.9+.
 
 This checks your Python version, creates a `.venv` virtual environment, and
 installs the dependencies (`PySide6`, `Pillow`, `pillow-heif`, `pytest`).
+
+### Face recognition (optional)
+
+Face recognition depends on PyTorch, which is a large, optional install —
+not included by `./install.sh`. To enable it:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-recognition.txt
+```
+
+This pulls the standard PyPI wheels, which use an NVIDIA GPU automatically
+if present and fall back to CPU otherwise. On a machine with no NVIDIA GPU,
+avoid downloading ~2GB of unused CUDA libraries with the CPU-only wheel
+index instead:
+
+```bash
+pip install --index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
+```
+
+Without these dependencies installed, the app runs normally with the Face
+Recognition and Search by Name tabs simply absent.
 
 ## Usage
 
@@ -62,6 +96,11 @@ GitHub Release. You can also run the workflow manually from the Actions tab.
 
 These are unsigned builds, so Windows SmartScreen and macOS Gatekeeper will
 warn on first run; you'll need to explicitly allow the app to run.
+
+These prebuilt executables do **not** include face recognition — PyTorch is
+too large to bundle into a portable single-file build. Run from source with
+`requirements-recognition.txt` installed (see
+[Installation](#face-recognition-optional)) to use that feature.
 
 To build one locally instead:
 
