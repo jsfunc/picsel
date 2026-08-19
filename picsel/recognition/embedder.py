@@ -42,4 +42,11 @@ def embed_faces(image: Image.Image, detections: list[FaceDetection]) -> list[np.
     batch = fixed_image_standardization(torch.stack(faces)).to(DEVICE)
     with _resnet_lock, torch.no_grad():
         embeddings = _get_resnet()(batch)
-    return list(embeddings.cpu().numpy())
+        result = list(embeddings.cpu().numpy())
+        if DEVICE == "cuda":
+            # See detector.detect_faces's matching comment -- same reasoning,
+            # keeps this process's GPU footprint from permanently ratcheting
+            # up to its all-time peak (a batch of many/large faces from one
+            # busy photo) instead of settling back down between calls.
+            torch.cuda.empty_cache()
+    return result

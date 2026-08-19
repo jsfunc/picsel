@@ -63,6 +63,19 @@ def detect_faces(image: Image.Image) -> list[FaceDetection]:
     """
     with _mtcnn_lock:
         boxes, probs = _get_mtcnn().detect(image)
+        if DEVICE == "cuda":
+            # MTCNN builds an image pyramid over the full-resolution photo
+            # (deliberately uncapped -- see load_for_detection), so a single
+            # large/high-res photo can need a big working set. PyTorch's
+            # caching allocator keeps whatever peak it ever needed reserved
+            # for the rest of the process's life rather than returning it to
+            # the driver, so without this, GPU memory usage only ever grows
+            # as bigger photos get processed -- observed climbing to several
+            # GB over a session and eventually OOMing. Freed memory is empty
+            # cache, not in-use data, so this costs a bit of allocator
+            # overhead on the next call but no correctness or real perf
+            # trade-off.
+            torch.cuda.empty_cache()
     if boxes is None:
         return []
     return [
