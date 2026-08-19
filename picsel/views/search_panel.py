@@ -184,7 +184,7 @@ class SearchPanel(QWidget):
             list_item.setData(Qt.ItemDataRole.UserRole, hit.path)
             self.results_list.addItem(list_item)
 
-    def _on_search_finished(self, error: str) -> None:
+    def _on_search_finished(self, error: str, failed_paths: list) -> None:
         self._worker = None
         self.search_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
@@ -193,7 +193,12 @@ class SearchPanel(QWidget):
             return
         confirmed_count = sum(1 for hit in self._hits if hit.confirmed)
         prefix = "Cancelled. " if self._cancel_requested else ""
-        self.status_label.setText(f"{prefix}{len(self._hits)} occurrence(s) found ({confirmed_count} confirmed).")
+        suffix = (
+            f" ({len(failed_paths)} photo(s) could not be processed and were skipped.)" if failed_paths else ""
+        )
+        self.status_label.setText(
+            f"{prefix}{len(self._hits)} occurrence(s) found ({confirmed_count} confirmed).{suffix}"
+        )
 
     def _on_item_clicked(self, list_item: QListWidgetItem) -> None:
         path = list_item.data(Qt.ItemDataRole.UserRole)

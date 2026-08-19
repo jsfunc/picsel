@@ -43,7 +43,7 @@ class FaceDetectionWorker(QRunnable):
 
 class FolderSearchSignals(QObject):
     photo_processed = Signal(list, int, int)  # list[SearchHit] found in this photo, photos done, total
-    finished = Signal(str)  # error message ("" if ok)
+    finished = Signal(str, list)  # fatal error message ("" if ok), list[Path] of photos that failed individually
 
 
 class FolderSearchWorker(QRunnable):
@@ -78,20 +78,28 @@ class FolderSearchWorker(QRunnable):
         self._cancelled.set()
 
     def run(self) -> None:
+        failed: list[Path] = []
         try:
             for index, path in enumerate(self.paths):
                 if self._cancelled.is_set():
                     break
-                hits = search_photo(
-                    self.catalog,
-                    self.gallery,
-                    self.person,
-                    path,
-                    min_similarity=self.min_similarity,
-                    min_confidence=self.min_confidence,
-                )
+                try:
+                    hits = search_photo(
+                        self.catalog,
+                        self.gallery,
+                        self.person,
+                        path,
+                        min_similarity=self.min_similarity,
+                        min_confidence=self.min_confidence,
+                    )
+                except Exception:
+                    # One corrupted/unreadable photo shouldn't abort every
+                    # photo after it -- skip it, keep scanning, and let the
+                    # caller report which ones failed once the scan finishes.
+                    failed.append(path)
+                    hits = []
                 self.signals.photo_processed.emit(hits, index + 1, len(self.paths))
             error = ""
         except Exception as exc:
             error = str(exc)
-        self.signals.finished.emit(error)
+        self.signals.finished.emit(error, failed)
