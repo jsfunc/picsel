@@ -114,6 +114,17 @@ def renumber_by_creation_time(items: list[ImageItem], name: str) -> RenumberRepo
     Updates each renamed item's `.path` in place. Renames go through unique
     temporary names first, so arbitrary reorderings (not just simple swaps)
     can't collide with each other mid-rename.
+
+    Known limitation: if the second-phase rename (temp name -> final name)
+    fails for an item -- e.g. a permission error, or the process is killed
+    mid-batch -- that file is left on disk under its hidden
+    `.picsel_renumber_<uuid><ext>` name rather than restored to its original
+    name. It's not lost (`report.errors` names it, and `item.path` is kept
+    pointed at wherever it actually ended up), just left for the user to
+    rename back manually; deliberately not auto-recovered, since the
+    original name may have been taken by something else in the same batch
+    by the time the failure happens. Same-directory renames make this rare
+    in practice.
     """
     matched = [
         item
@@ -162,6 +173,11 @@ def rename_by_creation_date(items: list[ImageItem]) -> RenumberReport:
     temporary names first, so two items landing on the same target name (e.g.
     a burst shot within the same second) can't collide mid-rename; the
     later one gets a ` (1)`, ` (2)`, ... suffix via `unique_path`.
+
+    Known limitation: same as `renumber_by_creation_time` above -- a failed
+    second-phase rename leaves that one file under its hidden
+    `.picsel_rename_<uuid><ext>` name rather than restored automatically.
+    See that function's docstring for why.
     """
     report = RenumberReport()
     if not items:

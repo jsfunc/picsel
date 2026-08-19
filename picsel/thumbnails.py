@@ -15,6 +15,19 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_THUMBNAIL_SIZE = (160, 160)
 
+# Pillow's default (~89.5 megapixels) exists to guard against maliciously
+# crafted files designed to exhaust memory when decoded -- a small file
+# whose header claims an enormous pixel count. picSel only ever opens files
+# already on the user's own disk, and genuinely large real photos are
+# explicitly in scope (100MP+ sensors, stitched panoramas, high-DPI scans),
+# so the stock limit is too tight for legitimate use. Raised well past any
+# real camera/scanner output, but still bounded -- an image past this is
+# almost certainly a corrupt or adversarial file, not a real photo, and
+# it's still large enough that decoding it could stress an ordinary
+# machine's memory, so it's worth refusing with a clear reason rather than
+# either silently failing or risking a multi-gigabyte allocation attempt.
+Image.MAX_IMAGE_PIXELS = 300_000_000
+
 
 def pil_to_qimage(image: Image.Image) -> QImage:
     """Convert a PIL image to an owned QImage (RGB888)."""
@@ -24,20 +37,35 @@ def pil_to_qimage(image: Image.Image) -> QImage:
     return qimage.copy()
 
 
+def _reraise_decompression_bomb_clearly(path: Path, exc: Image.DecompressionBombError) -> None:
+    # Pillow's own message ends with "...could be decompression bomb DOS
+    # attack" -- alarming and misleading for what's almost always just a
+    # very large but legitimate photo. Lead with a plain explanation and
+    # keep Pillow's own numbers (it already reports the actual pixel count
+    # and the configured limit) rather than re-deriving them.
+    raise OSError(f"{path.name} is unusually large and was skipped for safety ({exc})") from exc
+
+
 def generate_thumbnail(path: Path, size: tuple[int, int] = DEFAULT_THUMBNAIL_SIZE) -> QImage:
     """Decode an image file and return a thumbnail-sized QImage (RGB888)."""
-    with Image.open(path) as img:
-        img = ImageOps.exif_transpose(img)
-        img.thumbnail(size)
-        return pil_to_qimage(img)
+    try:
+        with Image.open(path) as img:
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail(size)
+            return pil_to_qimage(img)
+    except Image.DecompressionBombError as exc:
+        _reraise_decompression_bomb_clearly(path, exc)
 
 
 def load_qimage(path: Path) -> QImage:
     """Decode an image file at full resolution, applying EXIF orientation."""
-    with Image.open(path) as img:
-        img.load()
-        img = ImageOps.exif_transpose(img)
-        return pil_to_qimage(img)
+    try:
+        with Image.open(path) as img:
+            img.load()
+            img = ImageOps.exif_transpose(img)
+            return pil_to_qimage(img)
+    except Image.DecompressionBombError as exc:
+        _reraise_decompression_bomb_clearly(path, exc)
 
 
 class ThumbnailSignals(QObject):
