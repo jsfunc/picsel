@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, QThreadPool
-from PySide6.QtGui import QColor, QFontMetrics, QIcon, QImage, QPixmap
+from PySide6.QtCore import QRectF, QSize, Qt, QThreadPool
+from PySide6.QtGui import QColor, QFontMetrics, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
 
 from picsel.models.image_item import ImageItem, Status
@@ -14,6 +14,38 @@ REJECTED_BG = QColor(125, 46, 46, 120)
 NEUTRAL_BG = QColor(0, 0, 0, 0)
 
 ICON_SIZE = QSize(120, 120)
+
+# The un-badged thumbnail pixmap, cached per item so a status change can
+# redraw the badge without re-decoding the image from disk.
+_RAW_PIXMAP_ROLE = Qt.ItemDataRole.UserRole + 1
+
+BADGE_DIAMETER = 22
+
+
+def _badged_pixmap(pixmap: QPixmap, status: Status) -> QPixmap:
+    """A copy of `pixmap` with a small check/cross badge in the top-left
+    corner for selected/rejected status -- the background tint alone isn't
+    reliably distinguishable for colorblind users (red/green is the most
+    common form of color vision deficiency), so this adds a shape cue that
+    doesn't depend on color to read."""
+    if status is Status.UNRATED:
+        return pixmap
+    color, glyph = (QColor(46, 140, 60), "✓") if status is Status.SELECTED else (QColor(170, 45, 45), "✕")
+
+    badged = QPixmap(pixmap)
+    painter = QPainter(badged)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    circle = QRectF(3, 3, BADGE_DIAMETER, BADGE_DIAMETER)
+    painter.setPen(QColor("white"))
+    painter.setBrush(color)
+    painter.drawEllipse(circle)
+    font = painter.font()
+    font.setPixelSize(int(BADGE_DIAMETER * 0.65))
+    font.setBold(True)
+    painter.setFont(font)
+    painter.drawText(circle, Qt.AlignmentFlag.AlignCenter, glyph)
+    painter.end()
+    return badged
 
 
 class ThumbnailList(QListWidget):
@@ -84,7 +116,10 @@ class ThumbnailList(QListWidget):
         if image.isNull():
             list_item.setToolTip(f"Failed to load thumbnail: {error}" if error else "Failed to load thumbnail")
             return
-        list_item.setIcon(QIcon(QPixmap.fromImage(image)))
+        pixmap = QPixmap.fromImage(image)
+        list_item.setData(_RAW_PIXMAP_ROLE, pixmap)
+        img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
+        list_item.setIcon(QIcon(_badged_pixmap(pixmap, img_item.status)))
 
     def refresh_badges(self) -> None:
         for i in range(self.count()):
@@ -100,6 +135,9 @@ class ThumbnailList(QListWidget):
                 list_item.setBackground(REJECTED_BG)
             else:
                 list_item.setBackground(NEUTRAL_BG)
+            raw_pixmap = list_item.data(_RAW_PIXMAP_ROLE)
+            if raw_pixmap is not None:
+                list_item.setIcon(QIcon(_badged_pixmap(raw_pixmap, img_item.status)))
 
     def select_index(self, index: int) -> None:
         if 0 <= index < self.count() and self.currentRow() != index:
