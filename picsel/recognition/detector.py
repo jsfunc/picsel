@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,14 @@ _CASCADE_THRESHOLDS = [0.5, 0.5, 0.3]
 DEFAULT_MIN_CONFIDENCE = 0.9
 
 _mtcnn: MTCNN | None = None
+# Guards both lazy model construction (two FaceDetectionWorker/
+# FolderSearchWorker threads racing on first use could otherwise each build
+# their own MTCNN, wasting GPU memory) and the detect() call itself (a
+# shared nn.Module's forward pass isn't guaranteed safe to run concurrently
+# from multiple threads) -- detection is already backgrounded off the UI
+# thread, so serializing it here just means concurrent requests queue up
+# instead of racing.
+_mtcnn_lock = threading.Lock()
 
 
 def _get_mtcnn() -> MTCNN:
@@ -52,7 +61,8 @@ def detect_faces(image: Image.Image) -> list[FaceDetection]:
     a live UI slider). That filtering is a free list comprehension, so it
     never needs to re-run detection.
     """
-    boxes, probs = _get_mtcnn().detect(image)
+    with _mtcnn_lock:
+        boxes, probs = _get_mtcnn().detect(image)
     if boxes is None:
         return []
     return [

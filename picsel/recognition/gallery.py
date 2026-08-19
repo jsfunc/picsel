@@ -45,6 +45,16 @@ class PersonGallery:
     def __init__(self, path: Path = DEFAULT_GALLERY_PATH) -> None:
         self.path = Path(path)
         self.people: list[Person] = []
+        # Set only when a gallery file *exists* but couldn't be read -- as
+        # opposed to legitimately not existing yet, which is a normal, silent
+        # empty start. Distinguishing the two matters because save() has no
+        # "don't overwrite if empty" guard (unlike FaceCatalog.save()) --
+        # Forget All Faces legitimately empties the gallery and must still be
+        # able to persist that. So a caller should check this right after
+        # construction and warn the user before anything else runs a save(),
+        # since that save would otherwise permanently overwrite the
+        # unreadable-but-still-present file with an empty one.
+        self.load_error: str | None = None
         self._load()
 
     def _load(self) -> None:
@@ -69,7 +79,13 @@ class PersonGallery:
             if compressed:
                 raw = gzip.decompress(raw)
             data = json.loads(raw)
-        except (OSError, gzip.BadGzipFile, json.JSONDecodeError):
+        except (OSError, gzip.BadGzipFile, json.JSONDecodeError) as exc:
+            self.load_error = (
+                f"Could not read the existing face gallery at {source} ({exc}). "
+                f"Starting empty -- avoid confirming any face names until this is "
+                f"resolved, since doing so would save over (and permanently lose) "
+                f"the unreadable file."
+            )
             return
         self.people = [
             Person(
@@ -116,10 +132,17 @@ class PersonGallery:
             pass  # a plain (uncompressed) export -- read as-is
         data = json.loads(raw)
 
+        # Parse every entry before mutating self.people at all: a malformed
+        # entry partway through the file (e.g. missing "name") must not
+        # leave earlier entries already merged while the caller is told the
+        # whole import failed.
+        parsed = [
+            (entry["name"], [np.array(e, dtype=np.float32) for e in entry.get("embeddings", [])])
+            for entry in data.get("people", [])
+        ]
+
         added = 0
-        for entry in data.get("people", []):
-            name = entry["name"]
-            embeddings = [np.array(e, dtype=np.float32) for e in entry.get("embeddings", [])]
+        for name, embeddings in parsed:
             existing = self.find_by_name(name)
             if existing is not None:
                 existing.embeddings.extend(embeddings)

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QFontDatabase, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -240,6 +240,9 @@ class ManagePeopleDialog(QDialog):
         # so the caller can update any per-folder face records pointing at a
         # now-gone person id.
         self.merges: list[tuple[str, str]] = []
+        # Person ids removed via Forget Name this session, so the caller can
+        # clear that label from any per-folder face records pointing at them.
+        self.forgotten_ids: list[str] = []
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
@@ -260,6 +263,11 @@ class ManagePeopleDialog(QDialog):
         merge_button = QPushButton("Merge Selected")
         merge_button.clicked.connect(self._on_merge_clicked)
         actions_row.addWidget(merge_button)
+
+        forget_button = QPushButton("Forget Name")
+        forget_button.setToolTip("Remove the selected people entirely, including all their reference samples.")
+        forget_button.clicked.connect(self._on_forget_clicked)
+        actions_row.addWidget(forget_button)
         layout.addLayout(actions_row)
 
         transfer_row = QHBoxLayout()
@@ -315,6 +323,29 @@ class ManagePeopleDialog(QDialog):
             self.gallery.merge(keep_id=keep_id, remove_id=remove_id)
             self.merges.append((remove_id, keep_id))
         self.gallery.find_by_id(keep_id).name = name.strip()
+        self.gallery.save()
+        self._refresh_list()
+
+    def _on_forget_clicked(self) -> None:
+        selected_ids = [item.data(Qt.ItemDataRole.UserRole) for item in self.list_widget.selectedItems()]
+        if not selected_ids:
+            QMessageBox.information(self, "Forget Name", "Select one or more people to forget.")
+            return
+
+        names = [self.gallery.find_by_id(person_id).name for person_id in selected_ids]
+        confirm = QMessageBox.question(
+            self,
+            "Forget Name",
+            f"Forget {', '.join(names)} and all their reference samples? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        for person_id in selected_ids:
+            self.gallery.remove_person(person_id)
+            self.forgotten_ids.append(person_id)
         self.gallery.save()
         self._refresh_list()
 
@@ -414,6 +445,10 @@ class SearchPanel(QWidget):
         layout.addWidget(self.status_label)
 
         self.results_list = QListWidget()
+        # Monospace + fixed-width prefix (see _render_results) so filenames
+        # line up in a column regardless of whether a row is prefixed by the
+        # "✓" mark or a variable-width percentage like "86%".
+        self.results_list.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.results_list.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self.results_list)
 
@@ -442,6 +477,7 @@ class SearchPanel(QWidget):
             QMessageBox.information(self, "Search by Name", f'No one named "{name}" in the gallery yet.')
             return
         if not self.library.items:
+            QMessageBox.information(self, "Search by Name", "No photos are open to search.")
             return
 
         self.results_list.clear()
@@ -493,8 +529,12 @@ class SearchPanel(QWidget):
         confirmed = [hit for hit in self._hits if hit.confirmed]
         unconfirmed = sorted((hit for hit in self._hits if not hit.confirmed), key=lambda hit: hit.similarity, reverse=True)
         for hit in confirmed + unconfirmed:
-            status = "confirmed" if hit.confirmed else f"similarity {hit.similarity:.2f}"
-            list_item = QListWidgetItem(f"{hit.path.name}  —  {status}")
+            # Right-justified to a fixed width ("100%" is the longest
+            # possible prefix) so filenames line up in a column regardless
+            # of whether a row shows "✓" or a variable-width percentage --
+            # relies on results_list's monospace font to actually line up.
+            prefix = "✓ " if hit.confirmed else f"{hit.similarity:.0%}"
+            list_item = QListWidgetItem(f"{prefix:>4}  {hit.path.name}")
             list_item.setData(Qt.ItemDataRole.UserRole, hit.path)
             self.results_list.addItem(list_item)
 
@@ -532,6 +572,11 @@ class MainWindow(QMainWindow):
         if RECOGNITION_AVAILABLE:
             self.face_catalog = FaceCatalog()
             self.person_gallery = PersonGallery()
+            if self.person_gallery.load_error:
+                # Surfaced now, before anything can call save() and overwrite
+                # the unreadable file with an empty gallery -- see
+                # PersonGallery.load_error's docstring.
+                QMessageBox.warning(self, "Face Gallery", self.person_gallery.load_error)
             self._pending_face_workers: list[FaceDetectionWorker] = []
             # The records for whichever photo is currently displayed, so the
             # threshold slider can re-filter/redraw instantly without ever
@@ -1115,6 +1160,13 @@ class MainWindow(QMainWindow):
         self._update_face_display()
 
     def _on_face_edit_mode_toggled(self, enabled: bool) -> None:
+        if enabled:
+            # Crop and face-edit modes both interpret mouse drags on the
+            # viewer, and _face_edit_mode wins that check first -- leaving
+            # Crop's button checked while it's actually non-functional would
+            # be confusing, so turn it off.
+            self.viewer.set_crop_mode(False)
+            self.edit_panel.set_crop_mode_active(False)
         self.viewer.set_face_edit_mode(enabled)
 
     def _on_face_box_added(self, box: tuple[int, int, int, int]) -> None:
@@ -1172,14 +1224,16 @@ class MainWindow(QMainWindow):
     def _show_manage_people_dialog(self) -> None:
         dialog = ManagePeopleDialog(self.person_gallery, self)
         dialog.exec()
-        if dialog.merges:
-            # Only the currently-loaded folder's face records can be updated
-            # here; a merged-away person's label in a folder that isn't open
-            # right now will show as unconfirmed next time that folder is
-            # opened (its correct suggestion should resurface on its own,
-            # since the same embeddings now live under the kept person).
+        # Only the currently-loaded folder's face records can be updated
+        # here; a merged-away/forgotten person's label in a folder that isn't
+        # open right now will just show as unconfirmed next time that folder
+        # is opened (for a merge, its correct suggestion should resurface on
+        # its own, since the same embeddings now live under the kept person).
+        if dialog.merges or dialog.forgotten_ids:
             for removed_id, kept_id in dialog.merges:
                 self.face_catalog.remap_person(removed_id, kept_id)
+            for forgotten_id in dialog.forgotten_ids:
+                self.face_catalog.forget_person(forgotten_id)
             self.face_catalog.save()
             self._update_face_display()
 
@@ -1309,6 +1363,11 @@ class MainWindow(QMainWindow):
     def _on_crop_mode_toggled(self, enabled: bool) -> None:
         if enabled:
             self._ensure_edit_session()
+            if RECOGNITION_AVAILABLE:
+                # See _on_face_edit_mode_toggled -- same reasoning, other
+                # direction.
+                self.viewer.set_face_edit_mode(False)
+                self.face_panel.set_edit_mode_active(False)
         self.viewer.set_crop_mode(enabled)
 
     def _on_crop_selected(self, box: tuple[int, int, int, int]) -> None:
@@ -1373,6 +1432,14 @@ class MainWindow(QMainWindow):
                 if confirm != QMessageBox.StandardButton.Yes:
                     return
                 saved_path = session.save(overwrite=True)
+                if RECOGNITION_AVAILABLE:
+                    # The old cached boxes/embeddings were computed against
+                    # the pre-edit pixel geometry (rotation/flip/crop) and
+                    # are now wrong -- drop them so the next detection
+                    # request re-processes the actual current file.
+                    self.face_catalog.invalidate(saved_path)
+                    if self._current_face_path == saved_path:
+                        self._request_face_detection()
             elif mode == "as":
                 default_name = str(
                     session.source_path.with_name(

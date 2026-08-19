@@ -129,6 +129,29 @@ def test_save_and_load_roundtrip(tmp_path):
 def test_load_missing_file_starts_empty(tmp_path):
     gallery = PersonGallery(path=tmp_path / "does_not_exist.json")
     assert gallery.people == []
+    assert gallery.load_error is None
+
+
+def test_load_corrupted_existing_file_sets_load_error(tmp_path):
+    path = tmp_path / "people.json.gz"
+    path.write_bytes(b"not a valid gzip file")
+
+    gallery = PersonGallery(path=path)
+
+    assert gallery.people == []
+    assert gallery.load_error is not None
+    assert str(path) in gallery.load_error
+
+
+def test_load_success_leaves_load_error_none(tmp_path):
+    path = tmp_path / "people.json"
+    gallery = PersonGallery(path=path)
+    gallery.add_person("Alice")
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+
+    assert reloaded.load_error is None
 
 
 def test_remove_person(tmp_path):
@@ -325,6 +348,33 @@ def test_import_merges_into_existing_person_with_the_same_name(tmp_path):
     assert added == 0  # merged into the existing "Alice", not added as new
     assert len(destination.people) == 1
     assert len(destination.people[0].embeddings) == 2
+
+
+def test_import_is_atomic_on_a_malformed_entry(tmp_path):
+    import gzip
+    import json
+
+    malformed_path = tmp_path / "malformed_export.json.gz"
+    malformed_path.write_bytes(
+        gzip.compress(
+            json.dumps(
+                {
+                    "people": [
+                        {"id": "a", "name": "Alice", "embeddings": [[0.0] * 512]},
+                        {"id": "b", "embeddings": [[0.0] * 512]},  # missing "name"
+                    ]
+                }
+            ).encode("utf-8")
+        )
+    )
+
+    destination = _empty_gallery(tmp_path)
+    with pytest.raises(KeyError):
+        destination.import_from(malformed_path)
+
+    # Alice (parsed fine, listed before the malformed entry) must not have
+    # been merged in -- the whole import failed, so nothing should change.
+    assert destination.people == []
 
 
 def test_import_accepts_plain_uncompressed_json(tmp_path):

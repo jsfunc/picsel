@@ -9,7 +9,7 @@ from PIL import Image  # noqa: E402
 
 import picsel.recognition.faces as faces_module  # noqa: E402
 from picsel.recognition.detector import FaceDetection  # noqa: E402
-from picsel.recognition.faces import FACES_FILENAME, FaceCatalog  # noqa: E402
+from picsel.recognition.faces import FACES_FILENAME, FaceCatalog, FaceRecord  # noqa: E402
 
 
 def _make_image(path: Path) -> None:
@@ -35,6 +35,73 @@ def test_faces_for_runs_detection_only_once_per_image(tmp_path, monkeypatch):
     catalog.faces_for(path)
 
     assert len(calls) == 1
+
+
+def test_faces_for_does_not_cache_stale_result_after_folder_switch(tmp_path):
+    folder_a = tmp_path / "a"
+    folder_b = tmp_path / "b"
+    folder_a.mkdir()
+    folder_b.mkdir()
+    # Same filename in both folders -- the realistic case this bug affects
+    # (e.g. camera default naming like IMG_0001.jpg reused across folders).
+    path_a = folder_a / "photo.jpg"
+    path_b = folder_b / "photo.jpg"
+    _make_image(path_a)
+    _make_image(path_b)
+
+    catalog = FaceCatalog()
+    catalog.load(folder_a)
+
+    real_detect = faces_module.detect_faces
+
+    def switching_detect(image):
+        # Simulate load() firing on the GUI thread while this (slow,
+        # normally-background) detection call for folder_a is still in
+        # flight -- the scenario a real FaceDetectionWorker can hit.
+        catalog.load(folder_b)
+        return real_detect(image)
+
+    monkeypatch_target = faces_module.detect_faces
+    faces_module.detect_faces = switching_detect
+    try:
+        result = catalog.faces_for(path_a)
+    finally:
+        faces_module.detect_faces = monkeypatch_target
+
+    # The stale folder_a result must not have been written into folder_b's
+    # cache under the shared filename "photo.jpg".
+    assert "photo.jpg" not in catalog._records
+    assert result == []  # still a valid (if uncached) answer for path_a itself
+
+
+def test_invalidate_drops_cached_record_forcing_redetection(tmp_path, monkeypatch):
+    path = tmp_path / "photo.jpg"
+    _make_image(path)
+
+    calls = []
+    real_detect = faces_module.detect_faces
+
+    def counting_detect(image):
+        calls.append(1)
+        return real_detect(image)
+
+    monkeypatch.setattr(faces_module, "detect_faces", counting_detect)
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    catalog.faces_for(path)
+    assert len(calls) == 1
+
+    catalog.invalidate(path)
+    catalog.faces_for(path)
+
+    assert len(calls) == 2  # re-ran detection instead of reusing the stale cache
+
+
+def test_invalidate_unknown_path_is_a_no_op(tmp_path):
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    catalog.invalidate(tmp_path / "never_seen.jpg")  # must not raise
 
 
 def test_add_manual_face_is_always_visible_regardless_of_threshold(tmp_path):
@@ -176,3 +243,43 @@ def test_unassign_all_people_clears_every_record(tmp_path):
 
     assert record_a.person_id is None
     assert record_b.person_id is None
+
+
+def test_forget_person_clears_only_that_persons_records(tmp_path):
+    path = tmp_path / "photo.jpg"
+    _make_image(path)
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    record_a = catalog.add_manual_face(path, box=(10, 10, 50, 50))
+    record_b = catalog.add_manual_face(path, box=(60, 60, 100, 100))
+    catalog.assign_person(record_a, "person-1")
+    catalog.assign_person(record_b, "person-2")
+
+    catalog.forget_person("person-1")
+
+    assert record_a.person_id is None
+    assert record_b.person_id == "person-2"  # untouched
+
+
+def test_face_record_equality_is_identity_not_value(tmp_path):
+    # Two different records sharing box+confidence (a plausible accident --
+    # e.g. two manual boxes drawn at the same spot) must not crash `in`/
+    # `.remove()` by falling through to comparing their embedding arrays.
+    path = tmp_path / "photo.jpg"
+    _make_image(path)
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    first = catalog.add_manual_face(path, box=(10, 10, 50, 50))
+    second = FaceRecord(box=first.box, confidence=None, embedding=first.embedding.copy())
+    records = catalog.faces_for(path)
+    records.append(second)
+
+    assert first in records
+    assert second in records
+    assert first is not second
+
+    catalog.remove_manual_face(path, second)
+    assert second not in records
+    assert first in records
