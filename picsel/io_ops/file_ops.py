@@ -246,6 +246,7 @@ def apply_culling(
         target_root = target_dirs.get(item.status)
         if target_root is None:
             continue
+        destination = None  # not yet computed if mkdir() itself is what fails below
         try:
             target_root.mkdir(parents=True, exist_ok=True)
             destination = unique_path(target_root / item.path.name)
@@ -259,6 +260,19 @@ def apply_culling(
             else:
                 report.moved_rejected += 1
         except OSError as exc:
+            # A partial/truncated file can be left at `destination` if the
+            # move/copy was interrupted mid-write (disk full, a dropped
+            # network mount) -- shutil.move's cross-filesystem fallback
+            # copies then deletes the source sequentially, so if the copy
+            # itself raised (landing us here), the source was never
+            # touched and whatever's at `destination` is safe to discard.
+            # Best-effort: a failure cleaning up shouldn't mask the
+            # original error.
+            if destination is not None:
+                try:
+                    destination.unlink(missing_ok=True)
+                except OSError:
+                    pass
             report.errors.append(f"{item.path.name}: {exc}")
 
     return report

@@ -126,6 +126,44 @@ def test_apply_culling_copy_mode_leaves_originals(tmp_path):
     assert (tmp_path / "selected" / "a.jpg").exists()
 
 
+def test_apply_culling_cleans_up_a_partial_write_on_failure(tmp_path, monkeypatch):
+    # Regression test: a copy interrupted mid-write (disk full, a dropped
+    # network mount) previously left a truncated file at the destination.
+    # A retry would then see that leftover as "already there" and create a
+    # differently-named duplicate right next to the corruption instead of
+    # detecting or clearing it.
+    import shutil
+
+    from picsel.io_ops import file_ops
+
+    _make_image(tmp_path / "a.jpg")
+    library = ImageLibrary()
+    library.load(tmp_path)
+    library.set_status(0, Status.SELECTED)
+
+    real_copy2 = shutil.copy2
+
+    def failing_copy2(src, dst, *args, **kwargs):
+        Path(dst).write_bytes(b"CORRUPTED-PARTIAL-WRITE")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(file_ops.shutil, "copy2", failing_copy2)
+
+    report = apply_culling(library, mode="copy", selected_dir="selected", rejected_dir="rejected")
+
+    assert report.errors
+    assert not (tmp_path / "selected" / "a.jpg").exists(), "the partial/corrupted file was not cleaned up"
+
+    # A retry (once whatever caused the failure is fixed) should land on the
+    # plain expected filename, not a "(1)" duplicate next to leftover junk.
+    monkeypatch.setattr(file_ops.shutil, "copy2", real_copy2)
+    library.set_status(0, Status.SELECTED)
+    report2 = apply_culling(library, mode="copy", selected_dir="selected", rejected_dir="rejected")
+    assert not report2.errors
+    assert (tmp_path / "selected" / "a.jpg").exists()
+    assert not (tmp_path / "selected" / "a (1).jpg").exists()
+
+
 def test_apply_culling_requires_folder():
     library = ImageLibrary()
     with pytest.raises(ValueError):
