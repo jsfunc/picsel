@@ -14,6 +14,9 @@
 # distribution found for facenet-pytorch"). --extra-index-url adds the CPU
 # wheels as an additional source instead of replacing PyPI.
 #   pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
-torch>=2.2
-torchvision>=0.17
-facenet-pytorch>=2.5
+# Upper bounds are precautionary (see requirements.txt's comment) -- not
+# based on any known incompatibility with the next major version, just a
+# guard against a fresh install silently pulling one untested against.
+torch>=2.2,<3
+torchvision>=0.17,<1
+facenet-pytorch>=2.5,<3

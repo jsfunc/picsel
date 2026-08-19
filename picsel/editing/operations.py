@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import ExifTags, Image, ImageEnhance, ImageOps
 
 from picsel.io_ops.file_ops import unique_path
 
@@ -186,6 +186,30 @@ class EditSession:
         # never IFD1, so this can't happen.
         exif = self._original.getexif()
         if exif:
+            # Exif.tobytes() only serializes sub-IFDs that have actually
+            # been *accessed* via get_ifd() -- most real camera metadata
+            # that matters (DateTimeOriginal, GPS coordinates, exposure/
+            # ISO/lens info) lives in the Exif/GPS sub-IFDs, not IFD0, so
+            # without this it would be silently stripped from every saved
+            # photo. MakerNote (proprietary, manufacturer-specific binary)
+            # is deliberately left untouched, as is IFD1 (the embedded
+            # thumbnail -- excluding it is the whole point of
+            # re-serializing via tobytes() in the first place, see above).
+            #
+            # This alone is NOT sufficient on Pillow < 11.1: confirmed
+            # empirically (bisected 10.0 through 12.3) that on those
+            # versions, get_ifd() on a freshly-loaded, never-yet-accessed
+            # Exif object fails to retrieve the sub-IFD's contents at all --
+            # not just an "accessed" bookkeeping gap tobytes() could be
+            # made to see past. requirements.txt pins Pillow>=11.1 for
+            # exactly this reason; the explicit access below is kept as
+            # defense-in-depth (harmless on working versions, and correct
+            # should a future Pillow only regress the bookkeeping half).
+            for ifd_tag in (ExifTags.IFD.Exif, ExifTags.IFD.GPSInfo, ExifTags.IFD.Interop):
+                try:
+                    exif.get_ifd(ifd_tag)
+                except KeyError:
+                    pass  # that sub-IFD isn't present on this image -- nothing to preserve
             save_kwargs["exif"] = exif.tobytes()
 
         # Write to a same-directory temp file and rename into place, rather than

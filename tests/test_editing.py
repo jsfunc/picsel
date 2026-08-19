@@ -85,6 +85,40 @@ def test_save_preserves_exif(tmp_path):
     assert saved_exif.get(0x9003) == "2020:01:01 12:00:00"
 
 
+def test_save_preserves_exif_sub_ifd_data(tmp_path):
+    # Regression test: real camera metadata -- DateTimeOriginal, GPS
+    # coordinates, exposure/ISO/lens info -- lives in the Exif and GPS
+    # sub-IFDs (tags 0x8769/0x8825), not IFD0. Exif.tobytes() only
+    # serializes a sub-IFD that's actually been accessed via get_ifd(), so
+    # save() explicitly touches them first. Requires Pillow >=11.1 to
+    # actually pass, though (see operations.py's comment) -- confirmed
+    # empirically that get_ifd() itself fails to retrieve a freshly-loaded
+    # Exif object's sub-IFD contents at all on older versions, which no
+    # amount of explicit touching works around; requirements.txt pins the
+    # floor there for exactly this reason.
+    path = tmp_path / "photo.jpg"
+    image = Image.new("RGB", (4, 4), (10, 20, 30))
+    exif = Image.Exif()
+    exif[0x010F] = "RealCam"  # Make -- IFD0
+    sub = exif.get_ifd(0x8769)
+    sub[0x9003] = "2021:07:04 08:15:00"  # DateTimeOriginal -- Exif sub-IFD
+    gps = exif.get_ifd(0x8825)
+    gps[1] = "N"  # GPSLatitudeRef -- GPS sub-IFD
+    image.save(path, exif=exif.tobytes())
+
+    session = EditSession.from_path(path)
+    session.rotate()
+    saved_path = session.save(overwrite=False)
+
+    with Image.open(saved_path) as saved:
+        saved_exif = saved.getexif()
+        assert saved_exif.get(0x010F) == "RealCam"
+        saved_sub = dict(saved_exif.get_ifd(0x8769))
+        assert saved_sub.get(0x9003) == "2021:07:04 08:15:00", saved_sub
+        saved_gps = dict(saved_exif.get_ifd(0x8825))
+        assert saved_gps.get(1) == "N", saved_gps
+
+
 def test_save_preserves_exif_after_adjustments(tmp_path):
     # ImageEnhance (used for brightness/contrast/saturation) drops PIL's `.info`
     # dict entirely, so exif must be read from the original image, not the
