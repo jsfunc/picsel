@@ -9,9 +9,20 @@ pools and the prepare/write save split.
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThreadPool, Signal
+
+# Fail this module's import when the optional extra is absent, so
+# MainWindow's `except ImportError` sees it and hides the whole feature.
+# Checked with find_spec rather than by importing open_clip, which is slow
+# enough to notice at startup and pointless for a user who never scores
+# anything -- scorer.py imports it lazily for exactly that reason, which is
+# also why importing *this* module alone would otherwise succeed and leave
+# the score column and slider present but permanently empty.
+if importlib.util.find_spec("open_clip") is None:  # pragma: no cover - depends on install
+    raise ImportError("open_clip is required for quality scoring; see requirements-quality.txt")
 
 from tamis.quality.store import QualityStore
 from tamis.quality.worker import QualityScoreWorker
@@ -27,6 +38,7 @@ BATCH_SIZE = 16
 class QualityController(QObject):
     scores_updated = Signal()  # some photos got scores; the view should redraw
     progress = Signal(int, int)  # scored, total -- for the status bar
+    failed = Signal(str)  # scoring broke; reported once rather than silently doing nothing
 
     def __init__(self, parent_widget, library) -> None:
         super().__init__(parent_widget)
@@ -48,6 +60,7 @@ class QualityController(QObject):
 
         self._queued = 0
         self._done = 0
+        self._reported_failure = False
 
     # -- Folder lifecycle ------------------------------------------------
 
@@ -66,6 +79,7 @@ class QualityController(QObject):
         pending = [item.path for item in self.library.items if not self.store.has(item.path)]
         self._queued = len(pending)
         self._done = 0
+        self._reported_failure = False
         if not pending:
             self.progress.emit(0, 0)
             return
@@ -88,7 +102,15 @@ class QualityController(QObject):
     def _on_batch_done(self, scores: dict, generation: int, error: str, worker) -> None:
         if worker in self._pending:
             self._pending.remove(worker)
-        if worker.cancelled or error:
+        if worker.cancelled:
+            return
+        if error:
+            # Report once per folder: a failure here is systemic (missing
+            # weights, no disk space for the download, a broken GPU driver),
+            # so repeating it for every batch would be noise.
+            if not self._reported_failure:
+                self._reported_failure = True
+                self.failed.emit(error)
             return
         if not self.store.set_many(scores, generation):
             return  # folder changed while this batch was in flight

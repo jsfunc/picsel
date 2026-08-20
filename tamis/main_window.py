@@ -208,6 +208,7 @@ class MainWindow(QMainWindow):
             self.quality_ctl = QualityController(self, self.library)
             self.quality_ctl.scores_updated.connect(self._on_scores_updated)
             self.quality_ctl.progress.connect(self._on_scoring_progress)
+            self.quality_ctl.failed.connect(self._on_scoring_failed)
 
         self._build_menu()
         self._build_shortcuts()
@@ -289,6 +290,9 @@ class MainWindow(QMainWindow):
              if self.quality_ctl.score_for(item.path) is not None}
         )
         self._update_status_bar()
+
+    def _on_scoring_failed(self, error: str) -> None:
+        self.statusBar().showMessage(f"Quality scoring unavailable: {error}")
 
     def _on_scoring_progress(self, done: int, total: int) -> None:
         if total and done < total:
