@@ -23,6 +23,29 @@ for pkg in ("pillow_heif",):
     binaries += pkg_binaries
     hiddenimports += pkg_hiddenimports
 
+# Face recognition (torch/torchvision/facenet-pytorch) is only present in
+# the build environment for the -cpu/-gpu release variants (see the
+# `variant` axis in .github/workflows/release.yml's matrix) -- the lean
+# variant never installs requirements-recognition.txt, so this guards the
+# collection the same way the app itself guards the import
+# (RECOGNITION_AVAILABLE in tamis/main_window.py). Each of these bundles
+# its own native shared libraries (CUDA runtime libs for the GPU build in
+# particular) that static analysis can't see, same reasoning as pillow_heif
+# above.
+try:
+    import torch  # noqa: F401
+
+    RECOGNITION_AVAILABLE = True
+except ImportError:
+    RECOGNITION_AVAILABLE = False
+
+if RECOGNITION_AVAILABLE:
+    for pkg in ("torch", "torchvision", "facenet_pytorch"):
+        pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(pkg)
+        datas += pkg_datas
+        binaries += pkg_binaries
+        hiddenimports += pkg_hiddenimports
+
 a = Analysis(
     ["main.py"],
     pathex=[],

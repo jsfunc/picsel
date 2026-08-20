@@ -101,23 +101,35 @@ title, `Help > About Tamis`, and `python main.py --version`, but nothing
 derives it from the git tag automatically.
 
 Pushing a tag like `v1.0.0` triggers [.github/workflows/release.yml](.github/workflows/release.yml),
-which builds a standalone executable for Linux, Windows, and macOS (Apple
+which builds standalone executables for Linux, Windows, and macOS (Apple
 Silicon) with [PyInstaller](https://pyinstaller.org/) and attaches them to a
 GitHub Release. You can also run the workflow manually from the Actions tab.
 
 These are unsigned builds, so Windows SmartScreen and macOS Gatekeeper will
 warn on first run; you'll need to explicitly allow the app to run.
 
-These prebuilt executables do **not** include face recognition — PyTorch is
-too large to bundle into a portable single-file build. Run from source with
-`requirements-recognition.txt` installed (see
-[Installation](#face-recognition-optional)) to use that feature.
+Each OS gets up to three release assets, matching `install.sh`'s GPU/CPU/
+no-recognition choice:
+
+| Asset suffix | Contents | Approx. size |
+| --- | --- | --- |
+| *(none)* | No face recognition | a few hundred MB |
+| `-recognition-cpu` | Face recognition, CPU-only | ~1.5GB |
+| `-recognition-gpu` | Face recognition, CUDA-enabled | ~2.6GB |
+
+macOS has no `-recognition-gpu` asset — Apple dropped NVIDIA GPU support
+entirely, so a CUDA build isn't possible there; `-recognition-cpu` is the
+only face-recognition option on that platform.
 
 To build one locally instead:
 
 ```bash
 source .venv/bin/activate
 pip install -r requirements-dev.txt
+# Optional, for a face-recognition-capable build -- otherwise the same lean
+# build install.sh produces without recognition:
+pip install -r requirements-recognition.txt                                            # GPU-capable
+pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt  # CPU-only
 pyinstaller tamis.spec
 ```
 
