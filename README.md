@@ -16,7 +16,7 @@ keyboard, without leaving a single window.
   file.
 - **Apply culling** — move or copy selected/rejected photos into
   `selected/` and `rejected/` subfolders in one step.
-- **Face recognition** *(optional, see [Installation](#installation))* —
+- **Face recognition** *(installed by default, see [Installation](#installation))* —
   detect faces in a photo and suggest who they are, entirely offline (no
   cloud APIs, nothing ever leaves your machine). Suggestions are ranked by
   confidence, shown color-coded (green = likely, red = unlikely) rather than
@@ -45,29 +45,31 @@ Requires Python 3.9+.
 ```
 
 This checks your Python version, creates a `.venv` virtual environment, and
-installs the dependencies (`PySide6`, `Pillow`, `pillow-heif`).
+installs the dependencies (`PySide6`, `Pillow`, `pillow-heif`), **including
+face recognition by default**. It auto-detects an NVIDIA GPU (`nvidia-smi`)
+and installs the matching PyTorch build:
 
-### Face recognition (optional)
+- **GPU present**: the standard (CUDA-enabled) wheels — faster detection/
+  recognition, but a much larger download (~5.5GB total for the recognition
+  dependencies, since it bundles NVIDIA's CUDA runtime libraries).
+- **No GPU found**: the CPU-only wheels automatically (~1.7GB total) —
+  detection/recognition still works, just slower.
 
-Face recognition depends on PyTorch, which is a large, optional install —
-not included by `./install.sh`. To enable it:
+Flags to override the default:
+
+```bash
+./install.sh --cpu             # force the CPU-only build even with a GPU present
+./install.sh --no-recognition  # skip face recognition entirely (PySide6/Pillow only)
+```
+
+Without face recognition installed, the app runs normally with the Face
+Recognition and Search by Name tabs simply absent. To add it later:
 
 ```bash
 source .venv/bin/activate
-pip install -r requirements-recognition.txt
+pip install -r requirements-recognition.txt                                            # GPU-capable
+pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt  # CPU-only
 ```
-
-This pulls the standard PyPI wheels, which use an NVIDIA GPU automatically
-if present and fall back to CPU otherwise. On a machine with no NVIDIA GPU,
-avoid downloading ~2GB of unused CUDA libraries with the CPU-only wheel
-index instead:
-
-```bash
-pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
-```
-
-Without these dependencies installed, the app runs normally with the Face
-Recognition and Search by Name tabs simply absent.
 
 ## Usage
 
