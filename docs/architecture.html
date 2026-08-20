@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tamis — Architecture</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #1c1e21;
+    --muted: #5b6270;
+    --border: #e3e5e8;
+    --accent: #2f6feb;
+    --code-bg: #f4f5f7;
+    --card-bg: #f9fafb;
+    --green: #1f8b4c;
+    --red: #c23b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --text: #e7e9ec;
+      --muted: #9aa1ab;
+      --border: #2a2d33;
+      --accent: #6ea1ff;
+      --code-bg: #1d2024;
+      --card-bg: #1a1d21;
+      --green: #4cbf7f;
+      --red: #e07272;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 1.5rem 4rem;
+  }
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  header.hero {
+    padding: 3rem 0 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header.hero h1 {
+    font-size: 1.9rem;
+    margin: 0 0 0.4rem;
+  }
+  header.hero p.subtitle {
+    color: var(--muted);
+    font-size: 1.05rem;
+    margin: 0;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin-top: 3rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.1rem;
+    margin-top: 2rem;
+  }
+  p, li { color: var(--text); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin: 1.25rem 0;
+  }
+  .card h4 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.25rem 0;
+    font-size: 0.95rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { color: var(--muted); font-weight: 600; }
+  .pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin: 1.5rem 0;
+  }
+  .pipeline .step {
+    flex: 1 1 140px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 0.85rem;
+    font-size: 0.9rem;
+  }
+  .pipeline .step .n {
+    display: inline-block;
+    width: 1.4em; height: 1.4em;
+    line-height: 1.4em;
+    text-align: center;
+    border-radius: 50%;
+    background: var(--accent);
+    color: white;
+    font-size: 0.75rem;
+    margin-right: 0.4rem;
+  }
+  .toc {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+  .toc h4 { margin-top: 0; color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .toc ol { margin: 0.3rem 0 0; padding-left: 1.2rem; }
+  .toc li { margin: 0.2rem 0; }
+  .badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 0.1em 0.55em;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin-left: 0.4em;
+  }
+  .file-path { color: var(--muted); }
+  .swatch {
+    display: inline-block;
+    width: 0.8em; height: 0.8em;
+    border-radius: 2px;
+    margin-right: 0.35em;
+    vertical-align: middle;
+  }
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<header class="hero">
+  <h1>Tamis Architecture</h1>
+  <p class="subtitle">How the app is put together: the layers and the rules that keep them apart, the threading model, and the persistence formats — plus why the non-obvious parts are the way they are.</p>
+</header>
+
+<div class="toc">
+  <h4>Contents</h4>
+  <ol>
+    <li><a href="#layers">Layers and dependency rules</a></li>
+    <li><a href="#modules">Module map</a></li>
+    <li><a href="#controllers">Controllers, and what MainWindow keeps</a></li>
+    <li><a href="#threading">Threading</a></li>
+    <li><a href="#persistence">Persistence</a></li>
+    <li><a href="#recognition">Face recognition data model</a></li>
+    <li><a href="#editing">Editing</a></li>
+    <li><a href="#testing">Testing</a></li>
+    <li><a href="#extending">Where to add things</a></li>
+  </ol>
+</div>
+
+<p>
+  Tamis is a single-window PySide6 desktop app for culling and lightly editing one folder of photos at a time — about 5,800 lines across roughly 30 modules. This document covers the software structure. For how the face-recognition <em>algorithm</em> works (detection, embedding, identity matching), see <a href="face_recognition.html">Face Detection &amp; Recognition</a> instead.
+</p>
+
+<h2 id="layers">1. Layers and dependency rules</h2>
+
+<p>Dependencies point downward only. Nothing in a lower layer imports from a higher one.</p>
+
+<pre><code>                   main.py  →  tamis.app          process entry, logging, excepthook
+                                    │
+                               MainWindow          window, menus, shortcuts, navigation
+                                /        \
+                 EditController          FaceRecognitionController
+                     │                       │
+ ┌───────────────────┴───────────┬───────────┴──────────────────────┐
+ │                               │                                  │
+views/                       editing/                        recognition/
+(Qt widgets,                 (Pillow ops,                     (models, matching,
+ presentational)              undo/redo)                       per-folder cache)
+ │                               │                                  │
+ └───────────────┬───────────────┴──────────────────────────────────┘
+                 │
+        models/   io_ops/   thumbnails.py   metadata.py   persistence.py</code></pre>
+
+<p>The boundaries are enforced by discipline rather than tooling, so the rules are worth stating explicitly:</p>
+
+<table>
+  <tr><th>Rule</th><th>Why</th></tr>
+  <tr>
+    <td><code>recognition/</code> imports no Qt, except <code>worker.py</code></td>
+    <td>Keeps detection and matching testable without a <code>QApplication</code>, and makes the Qt seam a single, obvious file.</td>
+  </tr>
+  <tr>
+    <td><code>views/</code> are presentational: they emit signals describing an intent, and never mutate app state</td>
+    <td>A panel can be exercised in a test by connecting to its signals, and the decision about what an intent <em>means</em> lives in one place.</td>
+  </tr>
+  <tr>
+    <td><code>persistence.py</code> imports nothing from the rest of the app</td>
+    <td>Every layer that writes a sidecar needs it, so any dependency would create a cycle.</td>
+  </tr>
+  <tr>
+    <td>Controllers own mutable state; <code>MainWindow</code> owns only cross-feature glue</td>
+    <td>See <a href="#controllers">§3</a>.</td>
+  </tr>
+  <tr>
+    <td><code>models/</code> and <code>io_ops/</code> know nothing about Qt</td>
+    <td>Pure data and file operations, directly unit-testable.</td>
+  </tr>
+</table>
+
+<p>
+  Only two modules import <code>torch</code>: <span class="file-path">recognition/detector.py</span> and <span class="file-path">recognition/embedder.py</span>. Everything else in <code>recognition/</code> is plain numpy.
+</p>
+
+<h3>The optional-dependency boundary</h3>
+
+<p>
+  Face recognition depends on torch/torchvision/facenet-pytorch, an optional extra (<code>requirements-recognition.txt</code>). The whole feature degrades to &ldquo;not available&rdquo; rather than breaking the app, via a single guarded import in <span class="file-path">main_window.py</span>:
+</p>
+
+<pre><code>try:
+    from tamis.controllers.face_recognition_controller import FaceRecognitionController
+    from tamis.views.face_panel import FacePanel
+    from tamis.views.search_panel import SearchPanel
+    RECOGNITION_AVAILABLE = True
+except ImportError:
+    RECOGNITION_AVAILABLE = False</code></pre>
+
+<p>
+  Every use of the feature is then guarded by <code>RECOGNITION_AVAILABLE</code>, and the Face Recognition / Search by Name tabs are simply never added.
+</p>
+
+<div class="card">
+  <h4>Known inaccuracy</h4>
+  <p>
+    <span class="file-path">views/face_panel.py</span> states in its docstring that it has no dependency on <code>tamis.recognition</code> and so stays importable without the optional deps. That is no longer true — it imports <code>DEFAULT_MIN_CONFIDENCE</code> from <code>recognition.detector</code>, which imports torch at module level. The guarded import above covers it, so nothing breaks, but the docstring overstates the isolation.
+  </p>
+</div>
+
+<h2 id="modules">2. Module map</h2>
+
+<h3>Entry and shell</h3>
+<table>
+  <tr><th>Module</th><th>Responsibility</th></tr>
+  <tr><td><code>main.py</code></td><td>Argument handling (<code>--version</code>, optional folder), calls <code>app.run()</code>.</td></tr>
+  <tr><td><code>app.py</code></td><td>Rotating file log at <code>~/.tamis/tamis.log</code>, a <code>sys.excepthook</code> that logs and shows a dialog rather than vanishing, <code>QApplication</code> setup.</td></tr>
+  <tr><td><code>main_window.py</code></td><td>Layout, menus, shortcuts, the photo library, navigation, sorting, rename/renumber/culling, and the glue between the two controllers. The largest module (~900 lines) and the only place that knows about every feature.</td></tr>
+</table>
+
+<h3>Data and file operations</h3>
+<table>
+  <tr><th>Module</th><th>Responsibility</th></tr>
+  <tr><td><code>models/image_item.py</code></td><td><code>ImageItem</code> (path, status, rating) and the <code>Status</code> enum.</td></tr>
+  <tr><td><code>models/library.py</code></td><td><code>ImageLibrary</code>: loads a folder's supported images, tracks the current index, persists ratings/status.</td></tr>
+  <tr><td><code>io_ops/file_ops.py</code></td><td>Renaming, renumbering, capture-time reading, and applying culling (move/copy into <code>selected/</code> and <code>rejected/</code>).</td></tr>
+  <tr><td><code>persistence.py</code></td><td><code>atomic_write_bytes</code> — the single crash-safe write used by every sidecar.</td></tr>
+  <tr><td><code>metadata.py</code></td><td>EXIF/GPS extraction for the Image Information panel. No Qt.</td></tr>
+  <tr><td><code>thumbnails.py</code></td><td>Decoding (thumbnail, full image) plus the <code>QRunnable</code> workers that do it off the UI thread.</td></tr>
+</table>
+
+<h3>Views</h3>
+<p>
+  <code>image_viewer.py</code> (zoom/pan, crop rubber-band, face-box overlay), <code>thumbnail_list.py</code> (filmstrip), <code>edit_panel.py</code>, <code>metadata_panel.py</code>, <code>face_panel.py</code>, <code>search_panel.py</code>, <code>dialogs.py</code>, <code>manage_people_dialog.py</code>, and <code>theme.py</code> (shared colour constants).
+</p>
+<p>
+  <code>search_panel.py</code> is the exception to &ldquo;presentational&rdquo;: it owns its own <code>FolderSearchWorker</code> lifecycle, because a scan is panel-local state with no meaning elsewhere.
+</p>
+
+<h3>Editing and recognition</h3>
+<table>
+  <tr><th>Module</th><th>Responsibility</th></tr>
+  <tr><td><code>editing/operations.py</code></td><td>Pillow primitives and <code>EditSession</code> — an original image plus an undo/redo stack of operations.</td></tr>
+  <tr><td><code>recognition/detector.py</code></td><td>MTCNN face detection. Owns the lazily-built model and the lock serializing it.</td></tr>
+  <tr><td><code>recognition/embedder.py</code></td><td>InceptionResnetV1 (VGGFace2) embeddings, 512-d float32.</td></tr>
+  <tr><td><code>recognition/codec.py</code></td><td>On-disk encoding for embeddings (<a href="#encoding">§5.3</a>) and the identity key used to match a sample by value.</td></tr>
+  <tr><td><code>recognition/faces.py</code></td><td><code>FaceCatalog</code>: per-folder cache of detected faces.</td></tr>
+  <tr><td><code>recognition/gallery.py</code></td><td><code>PersonGallery</code>: cross-folder registry of known people and their embedding samples.</td></tr>
+  <tr><td><code>recognition/search.py</code></td><td>Scanning photos for one known person.</td></tr>
+  <tr><td><code>recognition/worker.py</code></td><td>The Qt seam: <code>QRunnable</code> wrappers for detection, saving, and folder search.</td></tr>
+</table>
+
+<h2 id="controllers">3. Controllers, and what MainWindow keeps</h2>
+
+<p>
+  <code>EditController</code> and <code>FaceRecognitionController</code> each own one feature's mutable state and wire their panel's signals to it. Neither knows the other exists.
+</p>
+
+<p><code>MainWindow</code> keeps only what genuinely spans both:</p>
+
+<ul>
+  <li>
+    <strong>Mode exclusivity.</strong> Crop mode and Edit Faces mode both interpret mouse drags on the same <code>ImageViewer</code>, so they cannot both be active. <code>EditPanel.crop_mode_toggled</code> and <code>FacePanel.edit_mode_toggled</code> are connected to small <code>MainWindow</code> wrappers that turn the other mode off before delegating.
+  </li>
+  <li>
+    <strong>Overwrite invalidation.</strong> Saving over a photo makes its cached face boxes wrong — they were computed against the pre-edit geometry — so all three save signals route through <code>MainWindow._save_edit</code>, which handles that side effect.
+  </li>
+  <li>
+    <strong>Search cancellation.</strong> A merge or forget in Manage People can remove a <code>Person</code> that a running <code>SearchPanel</code> scan holds a reference to. <code>MainWindow</code> is the only object that knows about both.
+  </li>
+</ul>
+
+<p>
+  Everything else is connected directly from panel to controller. The pattern is deliberate: where a signal is <em>not</em> connected in the obvious place, the controller carries a comment explaining which cross-feature concern moved it up.
+</p>
+
+<h2 id="threading">4. Threading</h2>
+
+<p>This is the subtlest part of the app and the source of most of its historical bugs. Three pools, with different rules.</p>
+
+<h3>4.1 The shared pool — <code>QThreadPool.globalInstance()</code></h3>
+
+<p>Runs thumbnail decoding, full-image decoding and metadata reading, prioritised so the photo on screen is not stuck behind background work:</p>
+
+<table>
+  <tr><th>Work</th><th>Priority</th></tr>
+  <tr><td>Full image for the current photo</td><td>10</td></tr>
+  <tr><td>Metadata for the current photo</td><td>0</td></tr>
+  <tr><td>Filmstrip thumbnails</td><td>0</td></tr>
+</table>
+
+<div class="card">
+  <h4>Priority orders the queue; it cannot preempt a running task</h4>
+  <p>
+    Face detection used to run here at priority 10. Because each detection worker held a thread while blocked on the model lock, enough of them occupied every thread in the pool and left nothing to decode the visible photo — measured at 152&nbsp;ms → 2103&nbsp;ms for the displayed image after browsing past 24 photos. Priority did not help, because the threads were already busy. Hence §4.2.
+  </p>
+</div>
+
+<h3>4.2 The detection pool — <code>maxThreadCount=1</code></h3>
+
+<p>
+  Owned by <code>FaceRecognitionController</code>. Detection is single-threaded anyway (the model lock), so a dedicated one-thread pool costs nothing and makes starving the shared pool structurally impossible.
+</p>
+<p>
+  Requests are <strong>debounced</strong> (200&nbsp;ms), so arrowing through photos faster than that enqueues nothing for the ones passed through. Photos navigated past are queued <em>behind</em> the current photo at lower priority, to warm the cache opportunistically — their results are cached per photo, so the work stays useful if the user returns. The warm queue is bounded (32) so a long browse cannot commit the GPU to minutes of work.
+</p>
+
+<h3>4.3 The save pool — <code>maxThreadCount=1</code></h3>
+
+<p>
+  Also owned by <code>FaceRecognitionController</code>. Sidecar writes are strictly ordered by a single thread, so an older snapshot can never land after a newer one and clobber it.
+</p>
+<p>Saving is split in two:</p>
+<ul>
+  <li><code>prepare_save()</code> runs <strong>synchronously on the UI thread</strong> and snapshots state into a plain dict. It must stay cheap.</li>
+  <li><code>write_payload()</code> runs on the save pool and does the serialization and disk write.</li>
+</ul>
+<p>
+  The split is what makes a save safe to run long after it was requested: the worker never touches the live catalog or gallery, only its own snapshot, so a folder switch or further labelling in the meantime cannot corrupt it.
+</p>
+
+<h3>4.4 Rules for workers</h3>
+
+<p>Every <code>QRunnable</code> in this app follows the same three rules. Breaking any of them has caused a real crash or leak:</p>
+
+<ol>
+  <li>
+    <strong>Hold a Python reference until the worker finishes.</strong> Each worker's <code>signals</code> object is a <code>QObject</code>; if the last Python reference is dropped while the worker runs, it can be collected before its queued cross-thread emit is delivered, crashing the worker thread. Hence the <code>_pending_*_workers</code> lists, which each callback removes itself from.
+  </li>
+  <li>
+    <strong>Guard results with a generation counter or an identity check.</strong> Stale results — from a photo navigated away from, or a folder switched out of — must be discarded on arrival. <code>FaceCatalog.faces_for</code> also checks generation <em>before caching</em>, because the cache is keyed by filename only, so a same-named file in a different folder would otherwise get a wrong entry.
+  </li>
+  <li>
+    <strong>Cancel, do not clear.</strong> <code>QThreadPool.clear()</code> drops queued runnables so they never run, never emit, and never leave the pending list — leaking the very reference keeping their signals alive. Cancellable workers instead check a <code>threading.Event</code> at the top of <code>run()</code> and exit immediately, which costs microseconds and keeps the bookkeeping honest.
+  </li>
+</ol>
+
+<h3>4.5 Shutdown</h3>
+
+<p><code>MainWindow.closeEvent</code> must not wait out work that could take minutes:</p>
+
+<pre><code>save library state
+cancel detection work             → queued workers exit immediately
+wait for detection to stop        → bounded by one in-flight photo
+cancel any running folder search  → checks between photos
+save face catalog
+wait for pending saves            → must NOT be cancelled; a queued save must land
+clear + waitForDone shared pool</code></pre>
+
+<p>
+  Note the asymmetry: detection and search are <strong>cancelled</strong> (their results are recomputable), while saves are <strong>waited for</strong> (dropping one loses user data).
+</p>
+
+<h2 id="persistence">5. Persistence</h2>
+
+<p>
+  Three files, all written through <code>persistence.atomic_write_bytes</code>, which writes to a same-directory temp file and <code>os.replace()</code>s it into place — atomic on POSIX and Windows alike, so a crash or full disk never leaves a truncated file.
+</p>
+
+<table>
+  <tr><th>File</th><th>Scope</th><th>Contents</th></tr>
+  <tr><td><code>.tamis_state.json</code></td><td>per folder</td><td>Ratings and status per filename, plus rename bookkeeping.</td></tr>
+  <tr><td><code>.tamis_faces.json</code></td><td>per folder</td><td>Face boxes, confidences, embeddings, dismissals, person ids.</td></tr>
+  <tr><td><code>~/.tamis/people.json.gz</code></td><td>global</td><td>Known people and their embedding samples.</td></tr>
+</table>
+
+<p>
+  Both per-folder sidecars live beside the photos, so culling state travels with the folder. Both are keyed by <strong>filename</strong>, not path — which is why a rename outside the app orphans an entry, and why <code>faces_for</code> must check generation before caching.
+</p>
+
+<h3>5.1 The load_error discipline</h3>
+
+<p>
+  Each store distinguishes &ldquo;this file does not exist yet&rdquo; (normal, silent) from &ldquo;this file exists but could not be read&rdquo; (dangerous). Only the second sets <code>load_error</code>.
+</p>
+<p>
+  The distinction matters because a failed read leaves the store <em>empty</em>, and the next save would then overwrite a possibly-recoverable file with that empty state. Every caller must check <code>load_error</code> after loading and refuse any operation that would trigger a save.
+</p>
+
+<div class="card">
+  <h4>It applies transitively</h4>
+  <p>
+    <code>FaceCatalog.reconcile_people</code> clears labels naming a person the gallery does not have — correct after Forget All Faces, catastrophic if the gallery merely failed to read, because it would clear every label in every folder opened afterwards <em>and save the result</em>. The caller checks <code>PersonGallery.load_error</code> first for exactly this reason.
+  </p>
+</div>
+
+<h3>5.2 Migration</h3>
+
+<p>Format and location changes are handled on read, never by a migration step:</p>
+<ul>
+  <li>Pre-rename sidecars (<code>.picsel_*</code>) are renamed in place on load.</li>
+  <li><code>~/.picsel/people.json.gz</code> is read as a fallback and rewritten to <code>~/.tamis/</code> on the next save.</li>
+  <li>Legacy embedding encodings are detected by type and converted on read.</li>
+</ul>
+<p>
+  Old files therefore keep working with no user action. The direction is one-way: once rewritten, older versions cannot read the result.
+</p>
+
+<h3 id="encoding">5.3 Embedding encoding</h3>
+
+<p>
+  Embeddings are 512-d float32. Storing them as JSON decimal arrays cost ~12,285 characters for 2,048 bytes of real information, because <code>json.dumps</code> writes the full float64 repr of values that never had that precision. On a 584-photo folder this produced a 194&nbsp;MB sidecar that took 3.8&nbsp;s to rewrite after every labelling action.
+</p>
+<p>They are now quantized to int8 with a per-vector float32 scale, base64'd into one fixed-width 688-character string:</p>
+
+<pre><code>  4 bytes   scale (float32, little-endian — pinned, since sidecars travel between machines)
+512 bytes   int8 values, dequantized as  value × scale</code></pre>
+
+<p>
+  Quantization error is at most <code>|max|/254</code>, which perturbs a cosine similarity by ~0.0018 — against a median gap of ~0.067 between the best and second-best candidate person, and a model whose own ambiguity is larger still. It is well below the precision the data actually carries.
+</p>
+
+<div class="card">
+  <h4>Encoding is idempotent, and that is load-bearing</h4>
+  <p>
+    <code>encode(decode(encode(v))) == encode(v)</code>, because dequantizing yields <code>q × scale</code> whose peak is exactly <code>127 × scale</code>. That property makes <code>codec.duplicate_key</code> an exact match test between a freshly computed embedding and the copy of itself that went through disk — which several correctness paths depend on (<a href="#identity">§6.2</a>). An absolute float tolerance cannot do that job, since the required threshold scales with the vector's magnitude.
+  </p>
+</div>
+
+<h2 id="recognition">6. Face recognition data model</h2>
+
+<h3>6.1 Two stores, different scopes</h3>
+
+<p>
+  <code>FaceCatalog</code> is <strong>per folder</strong>: which faces are in which photo, and who each one is (a person id). <code>PersonGallery</code> is <strong>global</strong>: who exists, and their embedding samples.
+</p>
+<p>
+  The split is why the same photo reachable from two folders gets two independent records that can be labelled differently, and why a change to the gallery has to be reconciled into folders that were not open at the time.
+</p>
+
+<h3 id="identity">6.2 Sample identity</h3>
+
+<p>
+  An embedding sample in the gallery carries no identity of its own — nothing links it back to the face record it came from. Everything that has to find a specific sample matches it <strong>by value</strong>, via <code>codec.duplicate_key</code>. That is what makes the following safe:
+</p>
+<ul>
+  <li><code>add_embedding</code> ignores a sample the person already holds, so a double-add cannot inflate the gallery.</li>
+  <li><code>remove_embedding</code> can find and drop the sample added under a previous label when a face is relabelled.</li>
+  <li>Duplicate and claimed-by-two-people samples are dropped when the gallery loads.</li>
+</ul>
+<p>
+  A duplicate sample does not improve matching — <code>similarity_to</code> and <code>rank_all</code> score a person by their single <em>closest</em> sample — so duplicates are pure cost. A sample held by two people is worse than cost: the same face votes for both, producing an exact tie that the suggestion then breaks arbitrarily.
+</p>
+
+<h3>6.3 Merges reach every folder</h3>
+
+<p>
+  Merging two people leaves a <strong>redirect</strong> (<code>merged_ids</code>, persisted with the gallery) from the merged-away id to the survivor, and <code>find_by_id</code> resolves through it. Folders closed at merge time still name the old id; they heal on load, when <code>FaceCatalog.reconcile_people</code> follows redirects and clears labels naming someone who no longer exists at all.
+</p>
+<p>
+  Without the redirect, an unresolvable id read as &ldquo;not labelled yet&rdquo;, so re-confirming that face added a <em>second</em> sample instead of moving the existing one — the mechanism behind a real gallery being 34% redundant.
+</p>
+
+<h3>6.4 No confidence cutoff</h3>
+
+<p>
+  There is no threshold that cleanly separates &ldquo;recognized&rdquo; from &ldquo;not&rdquo;: a genuine cross-photo match has been observed at 0.555 while unrelated siblings scored 0.61 against each other. So <code>identify</code> applies no similarity floor, and the UI conveys confidence <strong>continuously</strong>, by colouring a suggestion, rather than as a yes/no gate. Detector confidence <em>is</em> filterable, because it is cached unfiltered and the threshold slider is a free re-filter over the cached list.
+</p>
+
+<h2 id="editing">7. Editing</h2>
+
+<p>
+  <code>EditSession</code> holds the original image plus a list of operations. <code>render()</code> replays them from the original; undo pops the stack, so no intermediate images are retained. Adjustments (brightness/contrast/saturation) are held separately as live preview values until committed, so dragging a slider does not fill the undo stack.
+</p>
+
+<div class="card">
+  <h4>Two debounces, and one that is easy to misread</h4>
+  <p>
+    <code>EditController._adjustment_timer</code> (30&nbsp;ms) coalesces slider ticks. Because <code>QTimer.start()</code> <strong>restarts</strong> a running single-shot timer, a continuous drag never reaches the timeout — so no render happens <em>while</em> dragging, and the full-resolution render is paid once, when the drag pauses. The slider stays responsive throughout.
+  </p>
+  <p>
+    <code>EditPanel._commit_timer</code> (500&nbsp;ms) commits an adjustment to undo history after a pause, so keyboard-driven slider changes (arrow keys, Page&nbsp;Up/Down) land in history too — <code>sliderReleased</code> only fires for a mouse drag.
+  </p>
+</div>
+
+<p>
+  Saving always writes through a temp file and <code>os.replace()</code>, so overwriting an original can never truncate it. EXIF is re-serialized from the original via <code>getexif().tobytes()</code> rather than passed through as a raw blob, specifically so a crop cannot leave the pre-crop framing visible in an embedded IFD1 thumbnail.
+</p>
+
+<h2 id="testing">8. Testing</h2>
+
+<p>
+  <code>pytest</code>, 218 tests, no display required — <code>conftest.py</code> sets <code>QT_QPA_PLATFORM=offscreen</code> before any PySide6 import, and provides a session-scoped <code>QApplication</code> plus a <code>main_window</code> fixture that redirects <code>PersonGallery</code>'s default path into <code>tmp_path</code> so no test can touch the real <code>~/.tamis/people.json.gz</code>.
+</p>
+<p>
+  Recognition tests are skipped when torch is absent (<code>pytest.importorskip("torch")</code>), so the suite runs in either install.
+</p>
+
+<div class="card">
+  <h4>Two conventions worth keeping</h4>
+  <p>
+    <strong>Tests state the failure they prevent</strong>, not just the behaviour they assert. Most non-obvious code in this app exists because something broke; the test comment is where that is recorded.
+  </p>
+  <p>
+    <strong>Verify the verification.</strong> When adding a regression test, disable the fix and confirm the test actually fails. More than one test in this suite passed against the bug it was meant to catch until that was checked.
+  </p>
+</div>
+
+<h2 id="extending">9. Where to add things</h2>
+
+<table>
+  <tr><th>Adding</th><th>Goes in</th></tr>
+  <tr><td>A new panel</td><td><code>views/</code>, presentational, emitting intent signals; wire it into the tab widget in <code>MainWindow</code>.</td></tr>
+  <tr><td>New state for a feature</td><td>The owning controller, not <code>MainWindow</code>.</td></tr>
+  <tr><td>A new file operation</td><td><code>io_ops/file_ops.py</code>, pure and Qt-free, returning a report of successes and errors rather than raising on the first failure.</td></tr>
+  <tr><td>A new background task</td><td>A <code>QRunnable</code> in <code>thumbnails.py</code> or <code>recognition/worker.py</code>; follow the three rules in <a href="#threading">§4.4</a>.</td></tr>
+  <tr><td>A new persisted field</td><td>The relevant store's load / <code>prepare_save</code> pair; read defensively so older files still load.</td></tr>
+  <tr><td>Recognition logic</td><td><code>recognition/</code>, Qt-free; if it needs a thread, wrap it in <code>worker.py</code>.</td></tr>
+</table>
+
+<footer>
+  Tamis is a local, offline photo culling and editing app. This document describes the code structure; see <a href="face_recognition.html">Face Detection &amp; Recognition</a> for the recognition pipeline itself.
+</footer>
+
+</div>
+</body>
+</html>

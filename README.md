@@ -95,6 +95,18 @@ Pass a folder to open it immediately, or use File > Open Folder from the app.
 See Help > Keyboard Shortcuts inside the app for the full shortcut list
 (navigation, rating, editing, renaming).
 
+## Architecture
+
+[docs/architecture.html](docs/architecture.html) describes how the app is put
+together: the layers and the dependency rules between them, the threading
+model (three thread pools with different cancellation rules), the three
+sidecar formats, and the invariants that the non-obvious code exists to
+protect. Worth reading before adding a background task or a new persisted
+field — most of those rules are there because something broke once.
+
+For the recognition *algorithm* rather than the code structure, see
+[docs/face_recognition.html](docs/face_recognition.html).
+
 ## Running tests
 
 `pytest` is a dev-only dependency (not installed by `./install.sh`, so a
