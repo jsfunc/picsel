@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from tamis.persistence import atomic_write_bytes
+from tamis.recognition.codec import decode_embedding, encode_embedding
 from tamis.recognition.detector import DEFAULT_MIN_CONFIDENCE, FaceDetection, detect_faces, load_for_detection
 from tamis.recognition.embedder import embed_faces
 
@@ -114,7 +115,7 @@ class FaceCatalog:
                 FaceRecord(
                     box=tuple(entry["box"]),
                     confidence=entry.get("confidence"),
-                    embedding=np.array(entry["embedding"], dtype=np.float32),
+                    embedding=decode_embedding(entry["embedding"]),
                     dismissed=entry.get("dismissed", False),
                     person_id=entry.get("person_id"),
                 )
@@ -146,7 +147,7 @@ class FaceCatalog:
                 {
                     "box": list(record.box),
                     "confidence": record.confidence,
-                    "embedding": record.embedding.tolist(),
+                    "embedding": encode_embedding(record.embedding),
                     "dismissed": record.dismissed,
                     "person_id": record.person_id,
                 }
@@ -247,6 +248,38 @@ class FaceCatalog:
             for record in records:
                 if record.person_id == old_person_id:
                     record.person_id = new_person_id
+
+    def reconcile_people(self, redirects: dict[str, str], known_ids: set[str]) -> int:
+        """Bring this folder's labels back in line with the gallery, following
+        merge redirects and clearing labels naming someone who no longer
+        exists. Returns how many records changed.
+
+        Called on load, which is what makes a merge or a "forget" apply to
+        *every* folder rather than only whichever one happened to be open when
+        it was done. Previously only the open folder was repaired (see
+        `remap_person`), so records elsewhere kept pointing at a deleted id --
+        and since the labeling path reads an unresolvable id as "not labeled
+        yet", re-confirming such a face added a second copy of its sample to
+        the gallery instead of moving the existing one.
+        """
+        changed = 0
+        for records in list(self._records.values()):  # see remap_person for why list(...)
+            for record in records:
+                if record.person_id is None:
+                    continue
+                resolved: str | None = record.person_id
+                seen: set[str] = set()
+                while resolved in redirects and resolved not in seen:
+                    seen.add(resolved)
+                    resolved = redirects[resolved]
+                if resolved not in known_ids:
+                    resolved = None  # merged away with no successor, or forgotten entirely
+                if resolved != record.person_id:
+                    record.person_id = resolved
+                    changed += 1
+        if changed:
+            logger.info("Reconciled %d face label(s) against the gallery in %s", changed, self.folder)
+        return changed
 
     def forget_person(self, person_id: str) -> None:
         """Clear `person_id`'s label from every cached record in this folder

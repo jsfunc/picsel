@@ -105,6 +105,14 @@ class FaceRecognitionController:
         self.face_catalog.load(folder)
         if self.face_catalog.load_error:
             QMessageBox.warning(self.parent_widget, "Face Data", self.face_catalog.load_error)
+            return  # nothing was loaded, so there is nothing to reconcile
+        # Apply any merges/forgets done while this folder was closed. Without
+        # this they only ever reached the folder that was open at the time,
+        # leaving records here naming a person the gallery no longer has.
+        if self.face_catalog.reconcile_people(
+            self.person_gallery.merged_ids, {person.id for person in self.person_gallery.people}
+        ):
+            self.save_face_catalog()
 
     def save_face_catalog(self) -> None:
         # Snapshotting happens synchronously (prepare_save(), cheap -- a
@@ -300,6 +308,15 @@ class FaceRecognitionController:
             return
         record = self._current_visible_face_records[index]
         current_person = self.person_gallery.find_by_id(record.person_id) if record.person_id else None
+        if record.person_id is not None and current_person is None:
+            # A label naming someone the gallery no longer has (forgotten, or
+            # merged away before `merged_ids` recorded redirects). Clear it
+            # explicitly instead of falling through with it still set: the
+            # branch below only removes the old sample when `current_person`
+            # is found, so leaving a stale id here is what used to let a
+            # re-confirmation add a *second* copy of this face's sample while
+            # the orphaned first copy stayed put.
+            self.face_catalog.assign_person(record, None)
         current_name = current_person.name if current_person is not None else ""
         if name == current_name:
             return  # re-confirming an unchanged name -- don't add a duplicate embedding sample

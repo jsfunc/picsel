@@ -124,7 +124,18 @@ def test_save_and_load_roundtrip(tmp_path):
     assert reloaded.people[0].name == "Alice"
     assert reloaded.people[0].id == person.id
     assert len(reloaded.people[0].embeddings) == 1
-    assert np.allclose(reloaded.people[0].embeddings[0], embedding, atol=1e-6)
+    # Embeddings are stored quantized to int8 with a per-vector scale (see
+    # tamis.recognition.codec), so a round trip is lossy by design -- bounded
+    # by |max|/254 per component. What has to survive is the *similarity*
+    # this data exists to compute, not the exact bytes.
+    reloaded_embedding = reloaded.people[0].embeddings[0]
+    tolerance = float(np.abs(embedding).max()) / 254.0
+    assert np.allclose(reloaded_embedding, embedding, atol=tolerance)
+    cosine = float(
+        np.dot(reloaded_embedding, embedding)
+        / (np.linalg.norm(reloaded_embedding) * np.linalg.norm(embedding))
+    )
+    assert cosine > 0.9999
 
 
 def test_load_missing_file_starts_empty(tmp_path):
@@ -255,10 +266,15 @@ def test_merge_combines_embeddings_and_removes_the_source(tmp_path):
 
     gallery.merge(keep_id=capitalized.id, remove_id=lowercase.id)
 
-    assert gallery.find_by_id(lowercase.id) is None
+    assert lowercase.id not in {person.id for person in gallery.people}
     kept = gallery.find_by_id(capitalized.id)
     assert kept.name == "Papa"
     assert len(kept.embeddings) == 3
+    # The merged-away id doesn't dangle: it redirects to the surviving person,
+    # so face records naming it (in any folder, including ones not open at
+    # merge time) still resolve. See PersonGallery.merge.
+    assert gallery.find_by_id(lowercase.id) is kept
+    assert gallery.merged_ids[lowercase.id] == capitalized.id
 
 
 def test_merge_into_self_raises(tmp_path):
@@ -415,7 +431,9 @@ def test_export_then_import_into_a_fresh_gallery(tmp_path):
     imported_person = destination.people[0]
     assert imported_person.name == "Alice"
     assert imported_person.id != person.id  # never reuses the source's id
-    assert np.allclose(imported_person.embeddings[0], embedding)
+    # Lossy by design -- embeddings are stored quantized, see the round-trip
+    # test above.
+    assert np.allclose(imported_person.embeddings[0], embedding, atol=float(np.abs(embedding).max()) / 254.0)
 
 
 def test_import_merges_into_existing_person_with_the_same_name(tmp_path):
@@ -499,3 +517,180 @@ def test_similarity_to_person_with_no_samples_is_zero(tmp_path):
     person = gallery.add_person("NoSamplesYet")
     embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
     assert gallery.similarity_to(person.id, embedding) == 0.0
+
+
+def test_add_embedding_ignores_a_sample_the_person_already_has(tmp_path):
+    # Samples carry no identity, so nothing downstream can notice or undo a
+    # double-add; duplicates only slow every save down (a real gallery was
+    # measured 34% redundant) without improving matching, since a person is
+    # scored by their single closest sample.
+    gallery = _empty_gallery(tmp_path)
+    person = gallery.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+
+    gallery.add_embedding(person.id, embedding)
+    gallery.add_embedding(person.id, embedding)
+    gallery.add_embedding(person.id, embedding.copy())  # equal by value, different object
+
+    assert len(person.embeddings) == 1
+
+
+def test_add_embedding_recognises_a_sample_that_went_through_disk(tmp_path):
+    # The duplicate guard has to survive quantization: the stored copy comes
+    # back slightly different from the freshly-computed float32 it was made
+    # from, which is exactly why matching is on the encoded form rather than
+    # a float tolerance.
+    path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=path)
+    person = gallery.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    gallery.add_embedding(person.id, embedding)
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+    reloaded.add_embedding(reloaded.people[0].id, embedding)
+
+    assert len(reloaded.people[0].embeddings) == 1
+
+
+def test_remove_embedding_matches_a_sample_that_went_through_disk(tmp_path):
+    # Same reasoning as above, for the other direction: relabeling a face has
+    # to be able to find and drop the sample added under its previous label,
+    # or that sample is orphaned in the wrong person's reference data.
+    path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=path)
+    person = gallery.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    gallery.add_embedding(person.id, embedding)
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+    assert reloaded.remove_embedding(reloaded.people[0].id, embedding) is True
+
+
+def test_merge_does_not_duplicate_samples_both_people_already_had(tmp_path):
+    # The same face is routinely labeled in more than one folder (the face
+    # cache is per-folder, the gallery is global), so the two entries being
+    # merged very often overlap.
+    gallery = _empty_gallery(tmp_path)
+    rng = np.random.default_rng(0)
+    shared = rng.normal(size=512).astype(np.float32)
+    lowercase = gallery.add_person("papa")
+    gallery.add_embedding(lowercase.id, shared)
+    capitalized = gallery.add_person("Papa")
+    gallery.add_embedding(capitalized.id, shared.copy())
+    gallery.add_embedding(capitalized.id, rng.normal(size=512).astype(np.float32))
+
+    gallery.merge(keep_id=capitalized.id, remove_id=lowercase.id)
+
+    assert len(gallery.find_by_id(capitalized.id).embeddings) == 2
+
+
+def test_merge_redirects_survive_a_save_and_reload(tmp_path):
+    # The redirect is what makes a merge reach folders that were closed when
+    # it happened, so it has to outlive the session that did the merging.
+    path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=path)
+    rng = np.random.default_rng(0)
+    lowercase = gallery.add_person("papa")
+    gallery.add_embedding(lowercase.id, rng.normal(size=512).astype(np.float32))
+    capitalized = gallery.add_person("Papa")
+    gallery.add_embedding(capitalized.id, rng.normal(size=512).astype(np.float32))
+    gallery.merge(keep_id=capitalized.id, remove_id=lowercase.id)
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+
+    assert reloaded.find_by_id(lowercase.id) is not None
+    assert reloaded.find_by_id(lowercase.id).id == capitalized.id
+
+
+def test_merge_chains_resolve_to_the_final_survivor(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    rng = np.random.default_rng(0)
+    a = gallery.add_person("a")
+    gallery.add_embedding(a.id, rng.normal(size=512).astype(np.float32))
+    b = gallery.add_person("b")
+    gallery.add_embedding(b.id, rng.normal(size=512).astype(np.float32))
+    c = gallery.add_person("c")
+    gallery.add_embedding(c.id, rng.normal(size=512).astype(np.float32))
+
+    gallery.merge(keep_id=b.id, remove_id=a.id)
+    gallery.merge(keep_id=c.id, remove_id=b.id)
+
+    assert gallery.find_by_id(a.id).id == c.id
+    assert gallery.find_by_id(b.id).id == c.id
+
+
+def test_resolve_id_terminates_on_a_cyclic_redirect_map(tmp_path):
+    # A corrupted or hand-edited file must not be able to hang the app.
+    gallery = _empty_gallery(tmp_path)
+    gallery.merged_ids = {"a": "b", "b": "a"}
+    assert gallery.resolve_id("a") in {"a", "b"}
+
+
+def test_load_drops_duplicate_samples(tmp_path):
+    path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=path)
+    person = gallery.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    # Appended directly, bypassing add_embedding's guard, to stand in for a
+    # gallery written before that guard existed.
+    person.embeddings.extend([embedding, embedding.copy(), embedding.copy()])
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+
+    assert len(reloaded.people[0].embeddings) == 1
+
+
+def test_load_drops_a_sample_claimed_by_two_people(tmp_path):
+    # Such a sample makes one face vote for both people, producing an exact
+    # tie that identify() then breaks arbitrarily. Nothing records which label
+    # came last, so it is dropped from both rather than guessed.
+    path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=path)
+    rng = np.random.default_rng(0)
+    contested = rng.normal(size=512).astype(np.float32)
+    alice = gallery.add_person("Alice")
+    alice.embeddings.extend([contested, rng.normal(size=512).astype(np.float32)])
+    bob = gallery.add_person("Bob")
+    bob.embeddings.extend([contested.copy(), rng.normal(size=512).astype(np.float32)])
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+
+    for person in reloaded.people:
+        assert len(person.embeddings) == 1
+        assert not np.allclose(person.embeddings[0], contested, atol=1e-2)
+
+
+def test_remove_embedding_via_a_merged_away_id_still_deletes_the_emptied_person(tmp_path):
+    # find_by_id resolves merge redirects, so the person found may not be the
+    # id that was passed in -- removal has to act on the resolved person.
+    gallery = _empty_gallery(tmp_path)
+    rng = np.random.default_rng(0)
+    shared = rng.normal(size=512).astype(np.float32)
+    old = gallery.add_person("papa")
+    gallery.add_embedding(old.id, shared)
+    new = gallery.add_person("Papa")
+    gallery.add_embedding(new.id, rng.normal(size=512).astype(np.float32))
+    gallery.merge(keep_id=new.id, remove_id=old.id)
+
+    for sample in list(gallery.find_by_id(new.id).embeddings):
+        assert gallery.remove_embedding(old.id, sample) is True  # reached via the stale id
+
+    assert gallery.people == []
+
+
+def test_merging_two_ids_that_resolve_to_the_same_person_raises(tmp_path):
+    gallery = _empty_gallery(tmp_path)
+    rng = np.random.default_rng(0)
+    a = gallery.add_person("a")
+    gallery.add_embedding(a.id, rng.normal(size=512).astype(np.float32))
+    b = gallery.add_person("b")
+    gallery.add_embedding(b.id, rng.normal(size=512).astype(np.float32))
+    gallery.merge(keep_id=b.id, remove_id=a.id)
+
+    with pytest.raises(ValueError):
+        gallery.merge(keep_id=b.id, remove_id=a.id)  # a now redirects to b

@@ -422,3 +422,95 @@ def test_open_face_recognition_docs_warns_instead_of_opening_a_missing_file(main
 
     assert not opened
     assert warned
+
+
+def _stub_face(main_window, folder: Path, filename: str, embedding):
+    """Put one face record in the catalog for `filename` and make it the
+    controller's current photo, without running the detector."""
+    from tamis.recognition.faces import FaceRecord
+
+    ctl = main_window.face_ctl
+    path = folder / filename
+    record = FaceRecord(box=(0, 0, 9, 9), confidence=0.99, embedding=embedding)
+    ctl.face_catalog.folder = folder
+    ctl.face_catalog._records[filename] = [record]
+
+    class _Item:
+        def __init__(self, p):
+            self.path = p
+            self.name = p.name
+
+    main_window.library.items = [_Item(path)]
+    main_window.library.current_index = 0
+    ctl._current_face_path = path
+    ctl._current_face_records = [record]
+    ctl._update_face_display()
+    return record
+
+
+def test_confirming_a_name_after_a_merge_in_another_folder_moves_the_sample(main_window, tmp_path):
+    """A merge done while a folder was closed used to leave that folder's face
+    records pointing at a deleted person id. The labeling path reads an
+    unresolvable id as "not labeled yet", so re-confirming the name added a
+    *second* copy of the sample while the orphaned first copy stayed put --
+    the same face then voted for two people, and `identify` broke the tie
+    arbitrarily. Measured on a real gallery: 34% of samples were duplicates.
+    """
+    import numpy as np
+
+    ctl = main_window.face_ctl
+    gallery = ctl.person_gallery
+    folder_a = tmp_path / "A"
+    folder_a.mkdir()
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+
+    record = _stub_face(main_window, folder_a, "a.jpg", embedding)
+    ctl._on_face_name_confirmed(0, "Arnaud")
+    merged_away = gallery.find_by_name("Arnaud")
+    assert len(merged_away.embeddings) == 1
+
+    # Someone merges 'Arnaud' into 'Arnaud Fauchon' with a different folder open.
+    ctl.face_catalog.load(tmp_path / "B")
+    keep = gallery.add_person("Arnaud Fauchon")
+    gallery.add_embedding(keep.id, np.random.default_rng(1).normal(size=512).astype(np.float32))
+    gallery.merge(keep_id=keep.id, remove_id=merged_away.id)
+    samples_after_merge = len(keep.embeddings)
+
+    # Reopen folder A: its record still names the merged-away person.
+    ctl.face_catalog.load(folder_a)
+    ctl.face_catalog._records["a.jpg"] = [record]
+    ctl.face_catalog.reconcile_people(gallery.merged_ids, {p.id for p in gallery.people})
+    _stub_face(main_window, folder_a, "a.jpg", embedding)
+    ctl._current_face_records = [record]
+    ctl._current_visible_face_records = [record]
+
+    ctl._on_face_name_confirmed(0, "Arnaud Fauchon")
+
+    assert len(gallery.find_by_name("Arnaud Fauchon").embeddings) == samples_after_merge
+    assert sum(
+        1 for s in gallery.find_by_name("Arnaud Fauchon").embeddings if np.allclose(s, embedding, atol=1e-2)
+    ) == 1
+    assert record.person_id == keep.id
+
+
+def test_confirming_a_name_on_a_record_naming_a_forgotten_person_does_not_duplicate(main_window, tmp_path):
+    """Same failure mode, reached via Forget Name rather than a merge -- there
+    is no successor id to redirect to, so the stale label is cleared instead.
+    """
+    import numpy as np
+
+    ctl = main_window.face_ctl
+    gallery = ctl.person_gallery
+    folder = tmp_path / "A"
+    folder.mkdir()
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+
+    record = _stub_face(main_window, folder, "a.jpg", embedding)
+    record.person_id = "a-person-who-no-longer-exists"
+    ctl._current_visible_face_records = [record]
+
+    ctl._on_face_name_confirmed(0, "Alice")
+
+    alice = gallery.find_by_name("Alice")
+    assert len(alice.embeddings) == 1
+    assert record.person_id == alice.id

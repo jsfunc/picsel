@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 pytest.importorskip("torch")  # recognition deps are optional; see requirements-recognition.txt
@@ -106,21 +107,28 @@ def test_load_error_resets_on_a_later_successful_load(tmp_path):
 
 
 class _EmbeddingWithSideEffect:
-    """Wraps a real embedding array so `.tolist()` (called by `save()` while
-    building its JSON-able dict) can trigger an arbitrary side effect on its
-    first call -- used below to simulate a background worker inserting a new
-    key into `self._records` partway through `save()`'s iteration, exactly
-    the race `list(self._records.items())` guards against."""
+    """Wraps a real embedding array so serializing it (which `save()` does
+    while building its JSON-able dict) can trigger an arbitrary side effect on
+    its first use -- used below to simulate a background worker inserting a
+    new key into `self._records` partway through `save()`'s iteration, exactly
+    the race `list(self._records.items())` guards against.
+
+    Hooks `__array__` rather than any single method, so it stays valid however
+    the embedding is serialized: it used to be `.tolist()`, and is now
+    `codec.encode_embedding` (which reaches the array via `np.asarray`)."""
 
     def __init__(self, real, on_first_call) -> None:
         self._real = real
         self._on_first_call = on_first_call
 
-    def tolist(self):
+    def __array__(self, dtype=None, copy=None):
         if self._on_first_call is not None:
             callback, self._on_first_call = self._on_first_call, None
             callback()
-        return self._real.tolist()
+        return np.asarray(self._real, dtype=dtype)
+
+    def tolist(self):
+        return np.asarray(self).tolist()
 
 
 def test_save_tolerates_a_key_inserted_mid_iteration(tmp_path):
@@ -435,3 +443,89 @@ def test_face_record_equality_is_identity_not_value(tmp_path):
     catalog.remove_manual_face(path, second)
     assert second not in records
     assert first in records
+
+
+def test_reconcile_people_follows_a_merge_redirect(tmp_path):
+    # A merge only ever rewrote the sidecar of whichever folder was open at
+    # the time; every other folder kept naming the merged-away person.
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    record = FaceRecord(box=(0, 0, 9, 9), confidence=0.99, embedding=np.zeros(512, dtype=np.float32))
+    record.person_id = "old-id"
+    catalog._records["a.jpg"] = [record]
+
+    changed = catalog.reconcile_people({"old-id": "new-id"}, {"new-id"})
+
+    assert changed == 1
+    assert record.person_id == "new-id"
+
+
+def test_reconcile_people_clears_a_label_for_someone_forgotten(tmp_path):
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    record = FaceRecord(box=(0, 0, 9, 9), confidence=0.99, embedding=np.zeros(512, dtype=np.float32))
+    record.person_id = "gone"
+    catalog._records["a.jpg"] = [record]
+
+    changed = catalog.reconcile_people({}, {"someone-else"})
+
+    assert changed == 1
+    assert record.person_id is None
+
+
+def test_reconcile_people_leaves_valid_and_unlabelled_records_alone(tmp_path):
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    labelled = FaceRecord(box=(0, 0, 9, 9), confidence=0.99, embedding=np.zeros(512, dtype=np.float32))
+    labelled.person_id = "alice"
+    unlabelled = FaceRecord(box=(9, 9, 19, 19), confidence=0.99, embedding=np.zeros(512, dtype=np.float32))
+    catalog._records["a.jpg"] = [labelled, unlabelled]
+
+    assert catalog.reconcile_people({}, {"alice"}) == 0
+    assert labelled.person_id == "alice"
+    assert unlabelled.person_id is None
+
+
+def test_reconcile_people_terminates_on_a_cyclic_redirect_map(tmp_path):
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    record = FaceRecord(box=(0, 0, 9, 9), confidence=0.99, embedding=np.zeros(512, dtype=np.float32))
+    record.person_id = "a"
+    catalog._records["a.jpg"] = [record]
+
+    catalog.reconcile_people({"a": "b", "b": "a"}, {"a", "b"})  # must not hang
+
+
+def test_sidecar_stores_embeddings_as_compact_strings(tmp_path):
+    # Guards the encoding itself: a regression to JSON float arrays would
+    # quietly restore the ~18x size and the per-confirmation write cost.
+    path_a = tmp_path / "a.jpg"
+    _make_image(path_a)
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+    catalog.add_manual_face(path_a, box=(10, 10, 50, 50))
+    catalog.save()
+
+    written = json.loads((tmp_path / FACES_FILENAME).read_text())
+    assert isinstance(written["a.jpg"][0]["embedding"], str)
+
+
+def test_load_reads_a_legacy_sidecar_written_with_float_arrays(tmp_path):
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    legacy = {
+        "a.jpg": [
+            {
+                "box": [1, 2, 3, 4],
+                "confidence": 0.9,
+                "embedding": embedding.tolist(),
+                "dismissed": False,
+                "person_id": None,
+            }
+        ]
+    }
+    (tmp_path / FACES_FILENAME).write_text(json.dumps(legacy))
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+
+    assert np.allclose(catalog._records["a.jpg"][0].embedding, embedding, atol=1e-6)

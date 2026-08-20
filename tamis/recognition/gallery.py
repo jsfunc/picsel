@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,9 @@ from pathlib import Path
 import numpy as np
 
 from tamis.persistence import atomic_write_bytes
+from tamis.recognition.codec import decode_embedding, duplicate_key, encode_embedding
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_GALLERY_PATH = Path.home() / ".tamis" / "people.json.gz"
 # Pre-rename location (picSel -> Tamis) -- only ever consulted as a fallback
@@ -62,6 +66,11 @@ class PersonGallery:
         # since that save would otherwise permanently overwrite the
         # unreadable-but-still-present file with an empty one.
         self.load_error: str | None = None
+        # Redirects left behind by merge(): {merged-away id: surviving id}.
+        # Persisted, because a face record naming the merged-away person can
+        # live in *any* folder's sidecar, and only the folder open at merge
+        # time used to get repaired -- see `merge`'s docstring.
+        self.merged_ids: dict[str, str] = {}
         self._load()
 
     def _load(self) -> None:
@@ -109,10 +118,64 @@ class PersonGallery:
             Person(
                 id=entry["id"],
                 name=entry["name"],
-                embeddings=[np.array(e, dtype=np.float32) for e in entry.get("embeddings", [])],
+                embeddings=[decode_embedding(e) for e in entry.get("embeddings", [])],
             )
             for entry in data.get("people", [])
         ]
+        stored_redirects = data.get("merged_ids")
+        if isinstance(stored_redirects, dict):
+            self.merged_ids = {
+                str(old): str(new) for old, new in stored_redirects.items() if isinstance(new, str)
+            }
+        self._drop_duplicate_samples()
+
+    def _drop_duplicate_samples(self) -> int:
+        """Remove samples that are byte-identical to one already held, and
+        samples filed under two people at once. Returns how many were dropped.
+
+        Run on load rather than offered as a manual repair, because until the
+        duplicate guard in `add_embedding` existed, several ordinary actions
+        quietly produced these -- a `merge` concatenated both entries' samples
+        with no deduplication, and confirming a name on a face whose stored
+        person id had been merged away took the "this face has no person yet"
+        branch, adding a second copy instead of moving the existing one. A
+        real gallery built before those fixes was measured at 242 samples of
+        which 83 (34%) were redundant.
+
+        A sample held by *two different people* is worse than redundant: the
+        same face votes for both, so `identify` returns an exact tie and picks
+        between them arbitrarily (observed on real data, at similarity
+        1.000000). There is nothing recorded that says which label came last,
+        so there is no principled way to keep one -- it is dropped from both,
+        leaving each person their other samples and removing a guess that was
+        never better than a coin flip.
+
+        Keyed on the encoded form (see codec.duplicate_key) so this is a
+        linear dict pass, not an O(n^2) sweep of array comparisons.
+        """
+        owners: dict[str, set[str]] = {}
+        for person in self.people:
+            for embedding in person.embeddings:
+                owners.setdefault(duplicate_key(embedding), set()).add(person.id)
+        contested = {key for key, ids in owners.items() if len(ids) > 1}
+
+        dropped = 0
+        for person in self.people:
+            kept: list[np.ndarray] = []
+            seen: set[str] = set()
+            for embedding in person.embeddings:
+                key = duplicate_key(embedding)
+                if key in contested or key in seen:
+                    dropped += 1
+                    continue
+                seen.add(key)
+                kept.append(embedding)
+            person.embeddings = kept
+        if dropped:
+            logger.info(
+                "Dropped %d duplicate/contested embedding sample(s) while loading %s", dropped, self.path
+            )
+        return dropped
 
     def save(self) -> None:
         path, data = self.prepare_save()
@@ -128,12 +191,15 @@ class PersonGallery:
         return self.path, self._snapshot()
 
     def _snapshot(self) -> dict:
-        return {
+        snapshot: dict = {
             "people": [
-                {"id": p.id, "name": p.name, "embeddings": [e.tolist() for e in p.embeddings]}
+                {"id": p.id, "name": p.name, "embeddings": [encode_embedding(e) for e in p.embeddings]}
                 for p in self.people
             ]
         }
+        if self.merged_ids:
+            snapshot["merged_ids"] = dict(self.merged_ids)
+        return snapshot
 
     def export_to(self, path: Path) -> None:
         """Write this whole gallery, gzip-compressed, to an arbitrary path --
@@ -169,7 +235,7 @@ class PersonGallery:
         # leave earlier entries already merged while the caller is told the
         # whole import failed.
         parsed = [
-            (entry["name"], [np.array(e, dtype=np.float32) for e in entry.get("embeddings", [])])
+            (entry["name"], [decode_embedding(e) for e in entry.get("embeddings", [])])
             for entry in data.get("people", [])
         ]
 
@@ -177,15 +243,40 @@ class PersonGallery:
         for name, embeddings in parsed:
             existing = self.find_by_name(name)
             if existing is not None:
-                existing.embeddings.extend(embeddings)
+                # Via add_embedding, not extend: re-importing a gallery that
+                # overlaps this one (a backup, or the same export twice) would
+                # otherwise duplicate every shared sample.
+                for embedding in embeddings:
+                    self.add_embedding(existing.id, embedding)
             else:
                 person = self.add_person(name)
-                person.embeddings.extend(embeddings)
+                for embedding in embeddings:
+                    self.add_embedding(person.id, embedding)
                 added += 1
         return added
 
     def find_by_id(self, person_id: str) -> Person | None:
-        return next((p for p in self.people if p.id == person_id), None)
+        """Look up a person, following any redirect left by a `merge`.
+
+        Resolving here (rather than only rewriting the face records of
+        whichever folder happened to be open when the merge ran) is what makes
+        a merge take effect everywhere: a sidecar in a folder that was closed
+        at the time still names the merged-away person, and without this it
+        would read as "unknown person" -- which the labeling path used to
+        treat as "not labeled yet", quietly adding a duplicate sample instead
+        of moving the existing one.
+        """
+        return next((p for p in self.people if p.id == self.resolve_id(person_id)), None)
+
+    def resolve_id(self, person_id: str) -> str:
+        """Follow merge redirects to the id that actually holds this person's
+        samples now. Chains are followed (a was merged into b, b later into c),
+        with a bound so a corrupted file containing a cycle can't hang."""
+        seen: set[str] = set()
+        while person_id in self.merged_ids and person_id not in seen:
+            seen.add(person_id)
+            person_id = self.merged_ids[person_id]
+        return person_id
 
     def find_by_name(self, name: str) -> Person | None:
         return next((p for p in self.people if p.name == name), None)
@@ -207,10 +298,26 @@ class PersonGallery:
         self.people = [p for p in self.people if p.id != person_id]
 
     def add_embedding(self, person_id: str, embedding: np.ndarray) -> None:
+        """Add a reference sample for `person_id`, ignoring a sample this
+        person already holds.
+
+        The duplicate guard makes this idempotent, which matters because a
+        sample carries no identity of its own: nothing links it back to the
+        face record it came from, so a caller that adds the same face twice
+        has no way to notice or undo it. Re-adding used to be reachable from
+        several ordinary paths (see `_drop_duplicate_samples`) and inflated a
+        real gallery by 34%, slowing every save without improving matching --
+        duplicate samples don't strengthen a match, since `similarity_to` and
+        `rank_all` both score a person by their single closest sample.
+        """
         person = self.find_by_id(person_id)
         if person is None:
             raise ValueError(f"Unknown person id: {person_id!r}")
-        person.embeddings.append(np.asarray(embedding, dtype=np.float32))
+        embedding = np.asarray(embedding, dtype=np.float32)
+        key = duplicate_key(embedding)
+        if any(duplicate_key(sample) == key for sample in person.embeddings):
+            return
+        person.embeddings.append(embedding)
 
     def remove_embedding(self, person_id: str, embedding: np.ndarray) -> bool:
         """Remove `embedding` from `person_id`'s samples, matched by value
@@ -230,11 +337,20 @@ class PersonGallery:
         person = self.find_by_id(person_id)
         if person is None:
             return False
+        key = duplicate_key(embedding)
         for i, sample in enumerate(person.embeddings):
-            if np.allclose(sample, embedding, atol=1e-6):
+            # Matched on the encoded form rather than a float tolerance: one
+            # side of this comparison is typically a freshly-computed float32
+            # and the other came back through the sidecar. See
+            # codec.duplicate_key for why that is exact.
+            if duplicate_key(sample) == key:
                 del person.embeddings[i]
                 if not person.embeddings:
-                    self.remove_person(person_id)
+                    # person.id, not person_id: the argument may be an id that
+                    # was merged away, which find_by_id resolved to whoever
+                    # holds the samples now -- removing by the unresolved id
+                    # would match nobody and strand a zero-sample person.
+                    self.remove_person(person.id)
                 return True
         return False
 
@@ -244,6 +360,16 @@ class PersonGallery:
         person's name with different capitalization ("papa" vs "Papa").
         `keep_id`'s name is left as-is; callers wanting a different combined
         name should set `person.name` themselves after merging.
+
+        Samples already held by `keep_id` are not copied over again: the same
+        face is routinely labeled in more than one folder (the face cache is
+        per-folder, this gallery is global), so the two entries being merged
+        very often overlap.
+
+        Records the merge in `merged_ids` so face records naming `remove_id`
+        keep resolving -- see `find_by_id`. Only the folder open at merge time
+        can have its sidecar rewritten, and every other folder's records would
+        otherwise be left pointing at an id that no longer exists.
         """
         if keep_id == remove_id:
             raise ValueError("Cannot merge a person into themself")
@@ -251,8 +377,22 @@ class PersonGallery:
         remove = self.find_by_id(remove_id)
         if keep is None or remove is None:
             raise ValueError("Unknown person id")
-        keep.embeddings.extend(remove.embeddings)
-        self.remove_person(remove_id)
+        if keep.id == remove.id:
+            raise ValueError("Cannot merge a person into themself")  # both ids resolved to one person
+        for sample in remove.embeddings:
+            self.add_embedding(keep.id, sample)
+        # remove.id / keep.id rather than the arguments: either may be an id
+        # that a previous merge already redirected, and remove_person matches
+        # on the real id only.
+        self.remove_person(remove.id)
+        self.merged_ids[remove.id] = keep.id
+        self.merged_ids[remove_id] = keep.id
+        # Re-point anything that already redirected to the person just merged
+        # away, so lookups stay one hop and can't depend on chain length.
+        # list(...) because this assigns into the dict it is walking.
+        for old_id, new_id in list(self.merged_ids.items()):
+            if new_id == remove.id:
+                self.merged_ids[old_id] = keep.id
 
     def identify(self, embedding: np.ndarray, k: int = DEFAULT_K) -> list[tuple[Person, float]]:
         """Return candidate people for `embedding`, ranked most-similar first.
