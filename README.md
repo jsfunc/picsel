@@ -84,6 +84,39 @@ Either way, `Help > About Tamis` reports whether recognition is enabled, and
 `python -c "import torch; print(torch.cuda.is_available())"` confirms whether
 it will actually use the GPU.
 
+## Automatic quality scoring
+
+With the optional quality extra installed, every photo gets an **aesthetic
+score from 0 to 100**, shown in bold under its thumbnail, and a **vertical
+slider left of the filmstrip** hides anything below a chosen score. Nothing is
+deleted — lowering the slider brings the photos straight back, and arrow-key
+navigation skips whatever is hidden so the strip and the viewer agree.
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-quality.txt
+```
+
+Scores are computed once per folder in the background and cached in
+`.tamis_quality.json` beside the photos, so reopening a folder is instant.
+First use downloads ~1.7GB of CLIP weights (cached by torch) plus a 3.7MB
+scoring head into `~/.tamis/`; everything runs locally after that.
+
+The score comes from CLIP image embeddings fed to the LAION aesthetic
+predictor. It was chosen over five alternatives measured on a 455-photo
+unculled folder: cheap technical metrics (Laplacian variance, TOPIQ, MUSIQ)
+detect black and blurred frames well but flatten out on photos that are simply
+fine, while this one keeps discriminating — roughly twice the spread over the
+technically-good photos, which is the half of the problem a blur detector
+cannot solve. NIMA scored marginally better and is cheaper, but the only
+readily available weights ship in a toolbox under a non-commercial licence
+that cannot be distributed with GPLv3 software; this model's parts are MIT and
+Apache-2.0.
+
+It is a good way to surface obvious rejects and to order a folder roughly. It
+is not a judgement of your taste — treat a low score as a suggestion to look,
+not a verdict.
+
 ## Usage
 
 ```bash

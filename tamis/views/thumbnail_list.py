@@ -6,7 +6,13 @@ from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSize, Qt, QThreadPool
 from PySide6.QtGui import QFontMetrics, QIcon, QImage, QPainter, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QListWidget,
+    QListWidgetItem,
+    QStyle,
+    QStyledItemDelegate,
+)
 
 from tamis.models.image_item import ImageItem, Status
 from tamis.thumbnails import ThumbnailWorker
@@ -26,6 +32,10 @@ ICON_SIZE = QSize(120, 120)
 _RAW_PIXMAP_ROLE = Qt.ItemDataRole.UserRole + 1
 
 BADGE_DIAMETER = 22
+
+# The aesthetic score (0-100), stored per item so the delegate can draw it
+# without reaching back into a controller during paint.
+_SCORE_ROLE = Qt.ItemDataRole.UserRole + 2
 
 
 def _badged_pixmap(pixmap: QPixmap, status: Status) -> QPixmap:
@@ -54,6 +64,86 @@ def _badged_pixmap(pixmap: QPixmap, status: Status) -> QPixmap:
     return badged
 
 
+class _ThumbnailDelegate(QStyledItemDelegate):
+    """Paints an item as icon / filename / stars / score, with only the score
+    in bold.
+
+    A delegate rather than multi-line item text, because a QListWidgetItem
+    carries a single font for its whole label -- there is no way to bold one
+    line of it. Painting the lines separately is the only way to give the
+    score its own weight.
+    """
+
+    def sizeHint(self, option, index) -> QSize:
+        """Reserve the icon plus three text lines.
+
+        Required, not cosmetic: without it QStyledItemDelegate sizes the item
+        for a single line of display text, so paint() lays out three lines in
+        a rect too short for them and the filename lands on top of the
+        thumbnail. Must match ThumbnailList's grid size.
+        """
+        line = QFontMetrics(option.font).height()
+        return QSize(ICON_SIZE.width() + 20, ICON_SIZE.height() + 3 * line + 12)
+
+    def paint(self, painter, option, index) -> None:
+        self.initStyleOption(option, index)
+        painter.save()
+
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        if selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        else:
+            brush = index.data(Qt.ItemDataRole.BackgroundRole)
+            if brush is not None:
+                painter.fillRect(option.rect, brush)
+
+        metrics = QFontMetrics(option.font)
+        line = metrics.height()
+        rect = option.rect
+        # Three text lines are reserved at the bottom (name, stars, score);
+        # ThumbnailList sizes its grid to match, so these must stay in step.
+        text_top = rect.bottom() - 3 * line - 2
+
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
+        if icon is not None:
+            pixmap = icon.pixmap(ICON_SIZE)
+            x = rect.x() + (rect.width() - pixmap.width()) // 2
+            y = rect.y() + max(2, (text_top - rect.y() - pixmap.height()) // 2)
+            painter.drawPixmap(x, y, pixmap)
+
+        painter.setPen(
+            option.palette.highlightedText().color() if selected else option.palette.text().color()
+        )
+        item = index.data(Qt.ItemDataRole.UserRole)
+
+        name_rect = rect.adjusted(3, 0, -3, 0)
+        name_rect.setTop(text_top)
+        name_rect.setHeight(line)
+        painter.drawText(
+            name_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            metrics.elidedText(
+                index.data(Qt.ItemDataRole.DisplayRole) or "",
+                Qt.TextElideMode.ElideMiddle,
+                name_rect.width(),
+            ),
+        )
+
+        stars_rect = name_rect.translated(0, line)
+        if item is not None and item.rating:
+            painter.drawText(stars_rect, Qt.AlignmentFlag.AlignCenter, "\u2605" * item.rating)
+
+        score = index.data(_SCORE_ROLE)
+        if score is not None:
+            score_rect = stars_rect.translated(0, line)
+            font = painter.font()
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(score_rect, Qt.AlignmentFlag.AlignCenter, str(int(score)))
+
+        painter.restore()
+
+
 class ThumbnailList(QListWidget):
     """Single-row filmstrip; `currentRowChanged` reflects the selected image's index."""
 
@@ -72,10 +162,13 @@ class ThumbnailList(QListWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # Item text can span two lines (filename + star rating); size the grid and
-        # the widget's height around that so items aren't clipped at the bottom.
+        self.setItemDelegate(_ThumbnailDelegate(self))
+
+        # Three text lines below the icon: filename, star rating, aesthetic
+        # score. _ThumbnailDelegate reserves exactly this much, so the two
+        # must stay in step.
         line_height = QFontMetrics(self.font()).height()
-        item_size = QSize(ICON_SIZE.width() + 20, ICON_SIZE.height() + 2 * line_height + 12)
+        item_size = QSize(ICON_SIZE.width() + 20, ICON_SIZE.height() + 3 * line_height + 12)
         self.setGridSize(item_size)
         scrollbar_height = self.horizontalScrollBar().sizeHint().height()
         self.setFixedHeight(item_size.height() + scrollbar_height + 2 * self.frameWidth() + 4)
@@ -87,6 +180,11 @@ class ThumbnailList(QListWidget):
         # re-decode the folder. Pruned to the current photos on every
         # set_items, so it stays bounded by folder size (~57KB each).
         self._pixmap_cache: dict[Path, QPixmap] = {}
+        # Aesthetic scores by path, and the slider's current cutoff. Filtering
+        # only hides rows -- nothing is removed from the library, so a photo
+        # below the cutoff is still there when the slider comes back down.
+        self._scores: dict[Path, int] = {}
+        self._min_score = 0
 
     def set_items(self, items: list[ImageItem]) -> None:
         self._generation += 1
@@ -112,9 +210,13 @@ class ThumbnailList(QListWidget):
             list_item = QListWidgetItem(item.name)
             list_item.setData(Qt.ItemDataRole.UserRole, item)
             list_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            score = self._scores.get(item.path)
+            if score is not None:
+                list_item.setData(_SCORE_ROLE, score)
             self.addItem(list_item)
             self._request_thumbnail(list_item, item, generation)
         self.refresh_badges()
+        self._apply_filter()
 
     def _request_thumbnail(self, list_item: QListWidgetItem, item: ImageItem, generation: int) -> None:
         cached = self._pixmap_cache.get(item.path)
@@ -169,6 +271,48 @@ class ThumbnailList(QListWidget):
         self._pixmap_cache.pop(img_item.path, None)
         self._request_thumbnail(list_item, img_item, self._generation)
 
+    def set_scores(self, scores: dict) -> None:
+        """Attach aesthetic scores (path -> 0-100) and redraw. Called as
+        background scoring produces results, so it must tolerate being handed
+        a partial map many times over."""
+        self._scores.update(scores)
+        for i in range(self.count()):
+            list_item = self.item(i)
+            img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
+            score = self._scores.get(img_item.path)
+            if score is not None:
+                list_item.setData(_SCORE_ROLE, score)
+        self._apply_filter()
+        self.viewport().update()
+
+    def score_for(self, item: ImageItem) -> int | None:
+        return self._scores.get(item.path)
+
+    def set_min_score(self, minimum: int) -> None:
+        """Hide photos scoring below `minimum`. Hidden, never removed: the
+        slider is a view filter, and dropping items would lose the library's
+        own ordering and selection."""
+        self._min_score = minimum
+        self._apply_filter()
+
+    def min_score(self) -> int:
+        return self._min_score
+
+    def is_filtered_out(self, item: ImageItem) -> bool:
+        """Whether `item` is hidden by the current cutoff. An unscored photo
+        is never hidden -- scoring runs in the background, and making photos
+        vanish as results trickle in would be worse than showing them."""
+        if self._min_score <= 0:
+            return False
+        score = self._scores.get(item.path)
+        return score is not None and score < self._min_score
+
+    def _apply_filter(self) -> None:
+        for i in range(self.count()):
+            list_item = self.item(i)
+            img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
+            list_item.setHidden(self.is_filtered_out(img_item))
+
     def refresh_item(self, index: int) -> None:
         """Redraw one row's label, tint and badge.
 
@@ -186,10 +330,11 @@ class ThumbnailList(QListWidget):
         if list_item is None:
             return
         img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
-        label = img_item.name
-        if img_item.rating:
-            label += "\n" + "★" * img_item.rating
-        list_item.setText(label)
+        # Filename only. The star rating and the aesthetic score are drawn by
+        # _ThumbnailDelegate on their own lines -- including them here too
+        # renders them twice: once as part of this multi-line string, clipped
+        # into the single-line name row, and once by the delegate.
+        list_item.setText(img_item.name)
         if img_item.status is Status.SELECTED:
             list_item.setBackground(SELECTED_TINT)
         elif img_item.status is Status.REJECTED:

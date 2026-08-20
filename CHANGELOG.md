@@ -8,6 +8,19 @@ work landed, not necessarily when a version was tagged.
 
 ### Added
 
+- **Automatic aesthetic quality scoring** (optional; `requirements-quality.txt`).
+  Each photo gets a 0-100 score, shown in bold beneath its thumbnail, and a
+  vertical slider beside the filmstrip hides photos below a chosen score —
+  hidden only, never deleted, with arrow-key navigation skipping what the
+  filter hides so the strip and the viewer stay consistent. Scores are
+  computed in the background, batched 16 at a time, on their own
+  single-threaded pool, and cached per folder in `.tamis_quality.json` so
+  reopening is instant. Uses CLIP image embeddings plus the LAION aesthetic
+  predictor (MIT and Apache-2.0, GPLv3-compatible, entirely local); chosen
+  over NIMA/TOPIQ/MUSIQ/CLIP-IQA after measuring all of them on a 455-photo
+  unculled folder — the technical metrics detect defects but saturate on
+  photos that are merely fine, while this one keeps ranking them.
+
 - **Help > Architecture Docs**, opening
   [docs/architecture.html](docs/architecture.html) — how the app is put
   together: the layers and the dependency rules between them, the threading

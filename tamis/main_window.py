@@ -17,11 +17,16 @@ from PySide6.QtCore import Qt, QThreadPool, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
+    QHBoxLayout,
     QFileDialog,
+    QLabel,
     QMainWindow,
     QMessageBox,
+    QSlider,
     QSplitter,
     QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from tamis import __version__
@@ -54,6 +59,17 @@ try:
     RECOGNITION_AVAILABLE = True
 except ImportError:
     RECOGNITION_AVAILABLE = False
+
+# Aesthetic scoring needs open_clip plus a ~1.7GB CLIP download (see
+# requirements-quality.txt), a second optional extra on top of recognition.
+# Same degradation rule: without it the filmstrip simply shows no scores and
+# no filter slider.
+try:
+    from tamis.controllers.quality_controller import QualityController
+
+    QUALITY_AVAILABLE = True
+except ImportError:
+    QUALITY_AVAILABLE = False
 
 IMAGE_LOAD_PRIORITY = 10  # above the default (0) used by thumbnail workers
 
@@ -152,7 +168,7 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(top_splitter)
-        splitter.addWidget(self.thumbnail_list)
+        splitter.addWidget(self._build_filmstrip_row())
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
         splitter.setSizes([700, 150])
@@ -188,6 +204,11 @@ class MainWindow(QMainWindow):
             # the one place that knows about both controllers and SearchPanel.
             self.face_panel.manage_people_requested.connect(self._on_manage_people_requested)
 
+        if QUALITY_AVAILABLE:
+            self.quality_ctl = QualityController(self, self.library)
+            self.quality_ctl.scores_updated.connect(self._on_scores_updated)
+            self.quality_ctl.progress.connect(self._on_scoring_progress)
+
         self._build_menu()
         self._build_shortcuts()
 
@@ -199,6 +220,82 @@ class MainWindow(QMainWindow):
         self.edit_panel.save_overwrite_requested.connect(lambda: self._save_edit(mode="overwrite"))
 
         self._update_status_bar()
+
+    def _build_filmstrip_row(self) -> QWidget:
+        """The filmstrip, with the aesthetic-score filter slider to its left.
+
+        Vertical and adjacent to the strip so the cutoff reads against the
+        scores printed under each thumbnail. Absent entirely when scoring
+        isn't installed, rather than shown doing nothing.
+        """
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        if QUALITY_AVAILABLE:
+            column = QWidget()
+            column_layout = QVBoxLayout(column)
+            column_layout.setContentsMargins(4, 2, 0, 2)
+            column_layout.setSpacing(1)
+
+            self.score_filter_label = QLabel("0")
+            self.score_filter_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            self.score_filter_label.setToolTip("Minimum aesthetic score shown")
+
+            self.score_filter = QSlider(Qt.Orientation.Vertical)
+            self.score_filter.setRange(0, 100)
+            self.score_filter.setValue(0)
+            self.score_filter.setToolTip(
+                "Hide photos scoring below this. Nothing is deleted -- lower the slider to bring them back."
+            )
+            self.score_filter.valueChanged.connect(self._on_score_filter_changed)
+
+            column_layout.addWidget(self.score_filter_label)
+            column_layout.addWidget(self.score_filter, 1)
+            layout.addWidget(column)
+
+        layout.addWidget(self.thumbnail_list, 1)
+        return row
+
+    def _on_score_filter_changed(self, value: int) -> None:
+        self.score_filter_label.setText(str(value))
+        self.thumbnail_list.set_min_score(value)
+        # The photo on screen may have just been filtered out; move to the
+        # nearest one still visible rather than leaving the viewer showing
+        # something the strip no longer offers.
+        item = self.library.current_item
+        if item is not None and self.thumbnail_list.is_filtered_out(item):
+            nearest = self._nearest_visible_index(self.library.current_index)
+            if nearest is not None:
+                self.library.current_index = nearest
+                self._show_current()
+        self._update_status_bar()
+
+    def _nearest_visible_index(self, start: int) -> int | None:
+        """Closest index to `start` that the filter still shows, searching
+        outward in both directions. None when the cutoff hides everything."""
+        count = len(self.library.items)
+        for offset in range(count):
+            for index in (start + offset, start - offset):
+                if 0 <= index < count and not self.thumbnail_list.is_filtered_out(self.library.items[index]):
+                    return index
+        return None
+
+    def _on_scores_updated(self) -> None:
+        self.thumbnail_list.set_scores(
+            {item.path: self.quality_ctl.score_for(item.path)
+             for item in self.library.items
+             if self.quality_ctl.score_for(item.path) is not None}
+        )
+        self._update_status_bar()
+
+    def _on_scoring_progress(self, done: int, total: int) -> None:
+        if total and done < total:
+            self.statusBar().showMessage(f"Scoring photo quality: {done}/{total}...")
+        elif total:
+            self.statusBar().showMessage(f"Scored {total} photo(s).")
+            self._update_status_bar()
 
     # -- Menu / shortcuts --------------------------------------------------
 
@@ -379,6 +476,10 @@ class MainWindow(QMainWindow):
             self.library.sort_items(key=self._sort_key(self._sort_mode))
 
         self.thumbnail_list.set_items(self.library.items)
+        if QUALITY_AVAILABLE:
+            self.quality_ctl.load_folder(folder)
+            self._on_scores_updated()   # show whatever was cached from a previous visit
+            self.quality_ctl.score_folder()
         self.setWindowTitle(f"Tamis {__version__} — {folder}")
 
         if self.library.items:
@@ -421,17 +522,28 @@ class MainWindow(QMainWindow):
             self.edit_ctl.discard()
         return True
 
-    def _go_next(self) -> None:
+    def _step(self, delta: int) -> None:
+        """Move to the next/previous photo the filter actually shows.
+
+        Skipping hidden photos rather than stopping on them keeps the arrow
+        keys consistent with the filmstrip: a photo you cannot see in the
+        strip should not be reachable by walking past it either.
+        """
         if not self._can_navigate_away():
             return
-        self.library.next()
-        self._show_current()
+        index = self.library.current_index + delta
+        while 0 <= index < len(self.library.items):
+            if not self.thumbnail_list.is_filtered_out(self.library.items[index]):
+                self.library.current_index = index
+                self._show_current()
+                return
+            index += delta
+
+    def _go_next(self) -> None:
+        self._step(1)
 
     def _go_prev(self) -> None:
-        if not self._can_navigate_away():
-            return
-        self.library.prev()
-        self._show_current()
+        self._step(-1)
 
     def _on_thumbnail_selected(self, index: int) -> None:
         if index < 0 or index == self.library.current_index:
@@ -777,6 +889,10 @@ class MainWindow(QMainWindow):
             # Its capture time may have moved too, if it had no EXIF date and
             # was therefore being sorted by file mtime.
             self._capture_times.pop(saved_path, None)
+            if QUALITY_AVAILABLE:
+                # The score described the pre-edit pixels.
+                self.quality_ctl.invalidate(saved_path)
+                self.quality_ctl.score_folder()
         if saved_path is not None and mode == "overwrite" and RECOGNITION_AVAILABLE:
             # The old cached boxes/embeddings were computed against the
             # pre-edit pixel geometry (rotation/flip/crop) and are now
@@ -914,6 +1030,12 @@ class MainWindow(QMainWindow):
             # otherwise have no effect on it either way (it's a separate
             # pool), and a queued-but-not-yet-run save must never be dropped.
             self.face_ctl.wait_for_pending_saves()
+        if QUALITY_AVAILABLE:
+            # Cancel before waiting, same reasoning as detection: a folder's
+            # worth of queued scoring must not hold the window open.
+            self.quality_ctl.cancel()
+            self.quality_ctl.save()
+            self.quality_ctl.wait_for_idle()
         # Thumbnail and image-load workers run on the shared global thread pool.
         # If any are still running when Qt starts tearing down, they crash trying
         # to emit `finished` on a signals object whose C++ side is already gone.

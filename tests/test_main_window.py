@@ -815,3 +815,76 @@ def test_the_help_menu_offers_the_architecture_docs(main_window):
     help_menu = next(a.menu() for a in main_window.menuBar().actions() if "Help" in a.text())
     labels = [a.text() for a in help_menu.actions()]
     assert "Architecture Docs" in labels
+
+
+def _seed_scores(main_window, scores: dict) -> None:
+    """Attach scores by index without running the model."""
+    by_path = {main_window.library.items[i].path: s for i, s in scores.items()}
+    main_window.thumbnail_list.set_scores(by_path)
+
+
+def test_the_score_filter_hides_photos_without_touching_the_library(main_window, tmp_path):
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=4)
+    main_window.open_folder(photos)
+    _seed_scores(main_window, {0: 90, 1: 20, 2: 70, 3: 10})
+
+    main_window.score_filter.setValue(50)
+
+    assert len(main_window.library.items) == 4  # nothing removed
+    hidden = [i for i in range(4) if main_window.thumbnail_list.item(i).isHidden()]
+    assert hidden == [1, 3]
+
+    main_window.score_filter.setValue(0)
+    assert not any(main_window.thumbnail_list.item(i).isHidden() for i in range(4))
+
+
+def test_navigation_skips_photos_the_filter_hides(main_window, tmp_path):
+    # A photo you cannot see in the filmstrip should not be reachable by
+    # arrowing past it either.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=4)
+    main_window.open_folder(photos)
+    _seed_scores(main_window, {0: 90, 1: 20, 2: 70, 3: 10})
+    main_window.score_filter.setValue(50)
+    main_window.library.current_index = 0
+
+    main_window._go_next()
+    assert main_window.library.current_index == 2  # 1 is hidden
+
+    main_window._go_next()
+    assert main_window.library.current_index == 2  # 3 is hidden, so we stay
+
+    main_window._go_prev()
+    assert main_window.library.current_index == 0
+
+
+def test_raising_the_filter_moves_off_a_now_hidden_photo(main_window, tmp_path):
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=4)
+    main_window.open_folder(photos)
+    _seed_scores(main_window, {0: 90, 1: 20, 2: 70, 3: 10})
+    main_window.library.current_index = 1
+
+    main_window.score_filter.setValue(50)
+
+    assert main_window.library.current_index in (0, 2)
+    assert not main_window.thumbnail_list.is_filtered_out(main_window.library.current_item)
+
+
+def test_a_filter_hiding_everything_leaves_the_current_photo_alone(main_window, tmp_path):
+    # Better than jumping somewhere arbitrary or crashing on an empty result.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=2)
+    main_window.open_folder(photos)
+    _seed_scores(main_window, {0: 10, 1: 20})
+    main_window.library.current_index = 0
+
+    main_window.score_filter.setValue(100)
+
+    assert main_window._nearest_visible_index(0) is None
+    assert main_window.library.current_index == 0

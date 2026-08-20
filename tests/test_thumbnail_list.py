@@ -89,7 +89,11 @@ def test_refresh_item_redraws_only_the_row_asked_for(qapp):
         thumbnail_list_module._badged_pixmap = original
 
     assert len(repainted) == 1
-    assert thumbnail_list.item(2).text() == "img2.jpg\n★★★★"
+    # Item text is the filename alone: the star rating and the aesthetic
+    # score are painted by _ThumbnailDelegate on their own lines, so keeping
+    # them out of the text is what stops them being drawn twice.
+    assert thumbnail_list.item(2).text() == "img2.jpg"
+    assert thumbnail_list.item(2).data(Qt.ItemDataRole.UserRole).rating == 4
     assert thumbnail_list.item(0).text() == "img0.jpg"
 
 
@@ -108,7 +112,8 @@ def test_refresh_badges_still_redraws_every_row(qapp):
     for item in items:
         item.rating = 5
     thumbnail_list.refresh_badges()
-    assert all(thumbnail_list.item(i).text().endswith("★★★★★") for i in range(4))
+    assert all(thumbnail_list.item(i).text() == f"img{i}.jpg" for i in range(4))
+    assert all(thumbnail_list.item(i).data(Qt.ItemDataRole.UserRole).rating == 5 for i in range(4))
 
 
 def test_set_items_reuses_already_decoded_thumbnails(qapp):
@@ -160,3 +165,71 @@ def test_reload_item_ignores_an_out_of_range_index(qapp):
     thumbnail_list = ThumbnailList()
     thumbnail_list.set_items([ImageItem(path=Path("/tmp/a.jpg"))])
     thumbnail_list.reload_item(42)  # must not raise
+
+
+def test_scores_are_stored_and_shown_per_item(qapp):
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(3)]
+    thumbnail_list.set_items(items)
+
+    thumbnail_list.set_scores({items[0].path: 80, items[2].path: 20})
+
+    assert thumbnail_list.score_for(items[0]) == 80
+    assert thumbnail_list.score_for(items[1]) is None
+    assert thumbnail_list.item(0).data(thumbnail_list_module._SCORE_ROLE) == 80
+
+
+def test_the_filter_hides_low_scoring_photos_without_removing_them(qapp):
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(3)]
+    thumbnail_list.set_items(items)
+    thumbnail_list.set_scores({items[0].path: 80, items[1].path: 30, items[2].path: 55})
+
+    thumbnail_list.set_min_score(50)
+
+    assert thumbnail_list.count() == 3  # hidden, not removed
+    assert not thumbnail_list.item(0).isHidden()
+    assert thumbnail_list.item(1).isHidden()
+    assert not thumbnail_list.item(2).isHidden()
+
+    thumbnail_list.set_min_score(0)
+    assert not any(thumbnail_list.item(i).isHidden() for i in range(3))
+
+
+def test_an_unscored_photo_is_never_hidden(qapp):
+    # Scoring runs in the background; photos must not vanish as results
+    # trickle in, only once they are known to be below the cutoff.
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path("/tmp/img0.jpg"))]
+    thumbnail_list.set_items(items)
+    thumbnail_list.set_min_score(90)
+    assert not thumbnail_list.is_filtered_out(items[0])
+
+
+def test_scores_survive_a_re_sort(qapp):
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(3)]
+    thumbnail_list.set_items(items)
+    thumbnail_list.set_scores({items[i].path: 10 * i for i in range(3)})
+
+    thumbnail_list.set_items(list(reversed(items)))
+
+    assert thumbnail_list.item(0).data(thumbnail_list_module._SCORE_ROLE) == 20
+    assert thumbnail_list.score_for(items[1]) == 10
+
+
+def test_the_delegate_reserves_room_for_three_text_lines(qapp):
+    # Without this the item is sized for a single line and the filename gets
+    # painted on top of the thumbnail.
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    thumbnail_list = ThumbnailList()
+    thumbnail_list.set_items([ImageItem(path=Path("/tmp/img0.jpg"))])
+    option = QStyleOptionViewItem()
+    option.font = thumbnail_list.font()
+    hint = thumbnail_list.itemDelegate().sizeHint(option, thumbnail_list.model().index(0, 0))
+
+    line = QFontMetrics(thumbnail_list.font()).height()
+    assert hint.height() >= ICON_SIZE.height() + 3 * line
+    assert hint == thumbnail_list.gridSize()  # delegate and grid must agree

@@ -1,0 +1,19 @@
+-r requirements.txt
+
+# Aesthetic quality scoring (optional): CLIP image embeddings fed to the LAION
+# aesthetic head, producing the 0-100 score shown under each thumbnail and
+# driving the filmstrip's filter slider.
+#
+# Licences, since this ships in a GPLv3 app: open_clip is MIT, the CLIP
+# ViT-L/14 weights are MIT (openai/CLIP), and the aesthetic head is Apache-2.0
+# (christophschuhmann/improved-aesthetic-predictor). All GPLv3-compatible.
+# The widely-used pyiqa toolbox is deliberately NOT used here despite offering
+# better metrics: it is PolyForm Noncommercial, which cannot ship in GPLv3.
+#
+# Downloads roughly 1.7GB of CLIP weights on first use, cached by torch, plus
+# a 3.7MB head cached in ~/.tamis/. Everything runs locally thereafter.
+#
+# torch comes via requirements-recognition.txt if that extra is installed;
+# open_clip_torch will pull it otherwise. See that file for the CPU/CUDA and
+# Linux/Windows wheel caveats, which apply here too.
+open_clip_torch>=2.24,<4
