@@ -6,6 +6,15 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Help > Architecture Docs**, opening
+  [docs/architecture.html](docs/architecture.html) — how the app is put
+  together: the layers and the dependency rules between them, the threading
+  model, the sidecar formats, and the invariants the non-obvious code exists
+  to protect. Bundled into the packaged executable alongside the face
+  recognition docs.
+
 ## [2.2.0]
 
 ### Performance

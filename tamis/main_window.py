@@ -270,6 +270,12 @@ class MainWindow(QMainWindow):
             face_docs_action.triggered.connect(self._open_face_recognition_docs)
             help_menu.addAction(face_docs_action)
 
+        # Not behind RECOGNITION_AVAILABLE: this one describes the whole app,
+        # so it's just as relevant to a build without the optional extra.
+        architecture_action = QAction("Architecture Docs", self)
+        architecture_action.triggered.connect(self._open_architecture_docs)
+        help_menu.addAction(architecture_action)
+
         about_action = QAction("About Tamis", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
@@ -309,12 +315,25 @@ class MainWindow(QMainWindow):
     def _show_shortcuts(self) -> None:
         QMessageBox.information(self, "Keyboard Shortcuts", SHORTCUTS_TEXT)
 
-    def _open_face_recognition_docs(self) -> None:
-        path = _bundled_resource_path("docs/face_recognition.html")
+    def _open_docs(self, relative: str, title: str) -> None:
+        """Open a bundled HTML doc in the user's browser.
+
+        Anything opened this way must also be listed in tamis.spec's `datas`,
+        or it will be missing from the frozen executable and this will report
+        it as not found -- which is the whole reason for the exists() check:
+        packaging is where a doc goes astray, not a source checkout.
+        """
+        path = _bundled_resource_path(relative)
         if not path.exists():
-            QMessageBox.warning(self, "Face Recognition Docs", f"Documentation file not found:\n{path}")
+            QMessageBox.warning(self, title, f"Documentation file not found:\n{path}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_face_recognition_docs(self) -> None:
+        self._open_docs("docs/face_recognition.html", "Face Recognition Docs")
+
+    def _open_architecture_docs(self) -> None:
+        self._open_docs("docs/architecture.html", "Architecture Docs")
 
     def _show_about(self) -> None:
         recognition_line = (

@@ -11,7 +11,13 @@ the automated multi-platform build.
 
 from PyInstaller.utils.hooks import collect_all
 
-datas = [("docs/face_recognition.html", "docs")]
+# Everything MainWindow's Help menu can open. A doc reachable from the menu
+# but missing here exists in a source checkout and not in the frozen build,
+# so the omission only shows up in a release.
+datas = [
+    ("docs/face_recognition.html", "docs"),
+    ("docs/architecture.html", "docs"),
+]
 binaries = []
 hiddenimports = []
 

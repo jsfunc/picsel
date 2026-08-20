@@ -767,3 +767,51 @@ def test_closing_during_a_folder_search_does_not_wait_out_the_scan(main_window, 
 
 def test_cancel_search_is_a_no_op_with_no_search_running(main_window):
     main_window.search_panel.cancel_search()  # must not raise
+
+
+def test_every_doc_reachable_from_the_help_menu_is_bundled_in_the_executable():
+    """A doc the Help menu can open but tamis.spec doesn't bundle is present
+    in a source checkout and absent from the frozen build -- so the breakage
+    only appears in a release, in front of users. Cheap to catch here.
+    """
+    import re
+
+    repo_root = Path(__file__).resolve().parent.parent
+    source = (repo_root / "tamis" / "main_window.py").read_text()
+    referenced = set(re.findall(r'"(docs/[^"]+\.html)"', source))
+    assert referenced, "expected main_window to reference at least one bundled doc"
+
+    spec = (repo_root / "tamis.spec").read_text()
+    for relative in sorted(referenced):
+        assert (repo_root / relative).exists(), f"{relative} is referenced but missing from the repo"
+        assert f'"{relative}"' in spec, f"{relative} is reachable from the Help menu but not in tamis.spec datas"
+
+
+def test_architecture_docs_open_the_real_bundled_file(main_window, monkeypatch):
+    opened = []
+    monkeypatch.setattr(mw_module.QDesktopServices, "openUrl", lambda url: opened.append(url))
+
+    main_window._open_architecture_docs()
+
+    assert len(opened) == 1
+    assert opened[0].toLocalFile().endswith("docs/architecture.html")
+
+
+def test_architecture_docs_warn_instead_of_opening_a_missing_file(main_window, monkeypatch):
+    monkeypatch.setattr(
+        mw_module, "_bundled_resource_path", lambda relative: Path("/nonexistent/architecture.html")
+    )
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a))
+    opened = []
+    monkeypatch.setattr(mw_module.QDesktopServices, "openUrl", lambda url: opened.append(url))
+
+    main_window._open_architecture_docs()
+
+    assert warned and not opened
+
+
+def test_the_help_menu_offers_the_architecture_docs(main_window):
+    help_menu = next(a.menu() for a in main_window.menuBar().actions() if "Help" in a.text())
+    labels = [a.text() for a in help_menu.actions()]
+    assert "Architecture Docs" in labels
