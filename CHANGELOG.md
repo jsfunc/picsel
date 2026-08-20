@@ -6,6 +6,8 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+## [2.3.0]
+
 ### Added
 
 - **Automatic aesthetic quality scoring** (optional; `requirements-quality.txt`).
@@ -27,6 +29,13 @@ work landed, not necessarily when a version was tagged.
   model, the sidecar formats, and the invariants the non-obvious code exists
   to protect. Bundled into the packaged executable alongside the face
   recognition docs.
+
+### Changed
+
+- Release notes are now taken from this changelog's section for the tag
+  being released, rather than being a bare list of commit subjects. A tag
+  whose version has no section here fails the release job instead of
+  publishing an empty body.
 
 ## [2.2.0]
 
