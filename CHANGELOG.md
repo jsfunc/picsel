@@ -6,6 +6,61 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Confirming a face name could permanently duplicate its gallery sample.**
+  Merging or forgetting a person only rewrote the face records of whichever
+  folder happened to be open at the time, so records in every other folder
+  kept naming a person the gallery no longer had. The labeling path read
+  such a label as "not labeled yet", so re-confirming that face added a
+  *second* copy of its sample instead of moving the existing one — and
+  nothing ever removed the orphan. Measured on a real gallery: 83 of 242
+  samples (34%) were redundant, and 7 were filed under two people at once,
+  which made the same face vote for both and left `identify` breaking an
+  exact tie arbitrarily. Fixed on four levels: merges now record a
+  persistent redirect so a merged-away id keeps resolving in *every* folder;
+  face labels are reconciled against the gallery whenever a folder is
+  opened; a label naming a person who is genuinely gone is cleared rather
+  than silently ignored; and `add_embedding`/`merge`/`import_from` no longer
+  add a sample the person already has. Existing duplicate and
+  claimed-by-two-people samples are dropped when the gallery loads.
+
+### Changed
+
+- **Face embeddings are stored ~18x more compactly**, cutting the work done
+  on every face confirmation by about 85x. Both sidecars wrote each 512-d
+  embedding as a JSON array of decimal floats — roughly 12,285 characters
+  for 2,048 bytes of actual float32 data. They are now quantized to int8
+  with a per-vector scale and base64'd into one fixed-width 688-character
+  string (`tamis/recognition/codec.py`). On real data, `.tamis_faces.json`
+  went from 4.88MB to 0.28MB and `people.json.gz` from 1.05MB to 0.08MB,
+  and the serialization behind a single confirmed name dropped from ~315ms
+  to ~4ms. Quantization is well below the model's own precision: of 313
+  faces scored against 28 people, the suggested name changed for one, whose
+  top two candidates were separated by 0.000418 and were already being
+  ordered arbitrarily. Sidecars written by earlier versions still load
+  unchanged, and are rewritten in the new encoding on the next save.
+- Release assets are now CPU-only: the `-recognition-gpu` variants are no
+  longer built or published. GPU users should install from source instead
+  (`./install.sh` already detects an NVIDIA GPU and installs the CUDA
+  wheels), which is documented in the README's "Why there's no GPU
+  download". A CUDA build is still fully supported locally — it just can't
+  be a release asset, since at ~2.6GB it exceeds GitHub's 2GiB limit for
+  release assets. This is why 2.1.0 published without a Linux GPU build:
+  every build leg succeeded, then the upload of that one asset failed.
+- Release size budgets are now derived from real published v2.1.0 asset
+  sizes (lean 200MB, cpu 700MB) instead of pre-CI estimates, and are kept
+  below GitHub's 2GiB asset limit. The old GPU budget of 3500MB sat above
+  that limit, so it passed an asset that could never actually publish.
+
+### Fixed
+
+- Documented that PyPI's Windows `torch` wheel is CPU-only, so
+  `pip install -r requirements-recognition.txt` there silently gives CPU
+  inference rather than the CUDA build it does on Linux. This mislabelling
+  is what made 2.1.0's Windows `-recognition-gpu` asset byte-for-byte
+  identical to its `-recognition-cpu` one.
+
 ## [2.1.0]
 
 A large batch of work: the entire face-recognition feature (already usable,
