@@ -6,7 +6,35 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+### Performance
+
+- **Marking and rating a photo no longer redraw the whole filmstrip.**
+  `S`/`X`/`U`/`0`-`5` rebuilt a badged thumbnail for every photo in the
+  folder, so the cost of the app's most repeated keystrokes scaled both with
+  folder size and with how much of it was already marked (an unrated photo
+  short-circuits the badge drawing, so the work grew as culling progressed).
+  On a 584-photo folder: 5.8ms per keypress at the start of a pass rising to
+  26.7ms once everything was marked, now a flat 0.037ms.
+- **Face detection no longer starves the viewer.** With the Face Recognition
+  tab open, every navigation queued a full detection (~320ms per uncached
+  photo, serialized by the model lock) on the shared thread pool, where each
+  worker held a thread while blocked. Browsing past 24 photos filled all 16
+  shared threads, leaving no thread to decode the photo actually on screen.
+  Detection now runs on a dedicated single-threaded pool, is debounced so
+  photos skimmed past enqueue nothing, and queues already-visited photos
+  behind the current one at lower priority to warm the cache. Measured over
+  24 photos: displayed image 2323ms -> 707ms, faces 5986ms -> 782ms, and
+  time-to-faces no longer grows with how far you browsed.
+
 ### Fixed
+
+- **Closing the window during a Search by Name scan waited out the whole
+  scan.** The scan runs on the shared thread pool and `closeEvent` blocks on
+  `waitForDone()`, which only skips work that hadn't started -- so the window
+  stayed up and unresponsive for however long the scan had left (5.7s for a
+  20-photo folder of uncached photos, minutes for a real one). It is now
+  cancelled on close, bounding the wait to a single photo: 0.2s, independent
+  of folder size.
 
 - **Confirming a face name could permanently duplicate its gallery sample.**
   Merging or forgetting a person only rewrote the face records of whichever

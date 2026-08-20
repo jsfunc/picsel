@@ -1,9 +1,11 @@
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 
+import tamis.views.thumbnail_list as thumbnail_list_module
 from tamis.models.image_item import ImageItem, Status
-from tamis.views.thumbnail_list import _RAW_PIXMAP_ROLE, ThumbnailList, _badged_pixmap
+from tamis.views.thumbnail_list import ICON_SIZE, _RAW_PIXMAP_ROLE, ThumbnailList, _badged_pixmap
 
 
 def _solid_pixmap(color=(80, 80, 80), size=60) -> QPixmap:
@@ -62,3 +64,48 @@ def test_refresh_badges_redraws_the_icon_when_status_changes(qapp):
 
     selected_icon_pixmap = list_item.icon().pixmap(60, 60)
     assert selected_icon_pixmap.toImage().pixelColor(14, 14) != unrated_icon_pixmap.toImage().pixelColor(14, 14)
+
+
+def test_refresh_item_redraws_only_the_row_asked_for(qapp):
+    # Marking or rating changes exactly one photo. Redrawing the whole
+    # filmstrip made the cost of the app's most repeated keystrokes scale with
+    # the folder size and with how much of it was already marked.
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(5)]
+    thumbnail_list.set_items(items)
+    pixmap = QPixmap(ICON_SIZE)
+    pixmap.fill(Qt.GlobalColor.gray)
+    for i in range(thumbnail_list.count()):
+        thumbnail_list.item(i).setData(_RAW_PIXMAP_ROLE, pixmap)
+
+    repainted = []
+    original = thumbnail_list_module._badged_pixmap
+    thumbnail_list_module._badged_pixmap = lambda pm, status: repainted.append(status) or original(pm, status)
+    try:
+        items[2].status = Status.SELECTED
+        items[2].rating = 4
+        thumbnail_list.refresh_item(2)
+    finally:
+        thumbnail_list_module._badged_pixmap = original
+
+    assert len(repainted) == 1
+    assert thumbnail_list.item(2).text() == "img2.jpg\n★★★★"
+    assert thumbnail_list.item(0).text() == "img0.jpg"
+
+
+def test_refresh_item_ignores_an_out_of_range_index(qapp):
+    thumbnail_list = ThumbnailList()
+    thumbnail_list.set_items([ImageItem(path=Path("/tmp/a.jpg"))])
+    thumbnail_list.refresh_item(99)  # must not raise
+    thumbnail_list.refresh_item(-1)
+
+
+def test_refresh_badges_still_redraws_every_row(qapp):
+    # set_items and re-sorts legitimately need the whole list rebuilt.
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path(f"/tmp/img{i}.jpg"), rating=i) for i in range(4)]
+    thumbnail_list.set_items(items)
+    for item in items:
+        item.rating = 5
+    thumbnail_list.refresh_badges()
+    assert all(thumbnail_list.item(i).text().endswith("★★★★★") for i in range(4))

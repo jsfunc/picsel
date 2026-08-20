@@ -549,7 +549,9 @@ class MainWindow(QMainWindow):
         if self.library.current_item is None:
             return
         self.library.set_status(self.library.current_index, status)
-        self.thumbnail_list.refresh_badges()
+        # Only the current photo changed; refreshing the whole filmstrip made
+        # this keystroke's cost scale with the folder -- see refresh_item.
+        self.thumbnail_list.refresh_item(self.library.current_index)
         self._save_library_state()
         self._update_status_bar()
 
@@ -557,7 +559,9 @@ class MainWindow(QMainWindow):
         if self.library.current_item is None:
             return
         self.library.set_rating(self.library.current_index, rating)
-        self.thumbnail_list.refresh_badges()
+        # Only the current photo changed; refreshing the whole filmstrip made
+        # this keystroke's cost scale with the folder -- see refresh_item.
+        self.thumbnail_list.refresh_item(self.library.current_index)
         self._save_library_state()
         self._update_status_bar()
 
@@ -583,7 +587,7 @@ class MainWindow(QMainWindow):
             return
 
         self.edit_ctl.discard()
-        self.thumbnail_list.refresh_badges()
+        self.thumbnail_list.refresh_item(self.library.current_index)  # only this photo's name changed
         self._save_library_state()
         self.statusBar().showMessage(f"Renamed to {new_path.name}")
         self._update_status_bar()
