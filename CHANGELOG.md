@@ -6,14 +6,16 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+## [2.1.0]
+
 A large batch of work: the entire face-recognition feature (already usable,
 behind an optional install) plus a wide-ranging correctness/architecture
-pass. `__version__` has not been bumped for this yet — see
-[tamis/\_\_init\_\_.py](tamis/__init__.py)'s own comment on when to do that.
+pass, and a project rename.
 
 ### Added
 
-- **Face recognition** (optional — `pip install -r requirements-recognition.txt`):
+- **Face recognition** (installed by default — see the README's
+  Installation section for the `--cpu`/`--no-recognition` override flags):
   detect faces in a photo and suggest who they are, entirely offline (no
   cloud APIs). Suggestions are ranked by confidence and color-coded rather
   than a hard yes/no cutoff; confirming one strengthens future suggestions
@@ -22,6 +24,12 @@ pass. `__version__` has not been bumped for this yet — see
   and a progressive Search by Name tab. See
   [docs/face_recognition.html](docs/face_recognition.html) for how the
   detection/embedding/identity-matching pipeline actually works.
+- `install.sh` now installs face recognition by default, auto-detecting an
+  NVIDIA GPU and picking the matching PyTorch build (CUDA-enabled or
+  CPU-only) automatically.
+- Packaged executables now come in three variants per OS: no recognition,
+  CPU-only recognition, and GPU (CUDA) recognition — Linux and Windows get
+  all three, macOS gets the first two (no CUDA support on Apple hardware).
 - `--version`/`-v` CLI flag, a `Help > About Tamis` dialog, and a
   versioned window title — previously there was no way to tell which
   release a running copy actually was.
@@ -35,17 +43,22 @@ pass. `__version__` has not been bumped for this yet — see
 - A pick/reject badge on filmstrip thumbnails, in addition to the existing
   background tint, so status reads without relying on color alone.
 - A size-budget check in the release workflow, failing the build if a
-  future dependency change accidentally bundles face-recognition/CUDA
-  libraries into the portable executable.
+  future dependency change accidentally bloats a packaged executable
+  beyond what's expected for its recognition variant.
 
 ### Changed
 
+- **Renamed from picSel to Tamis** — the old name collided with an
+  unrelated commercial product in the same space (photo culling/editing
+  with facial recognition). Package/import path, on-disk sidecar file names
+  (`.tamis_state.json`, `.tamis_faces.json`, `~/.tamis/people.json.gz`),
+  and the GitHub repository all changed accordingly; existing data migrates
+  automatically from the old names with no user action needed.
 - `main_window.py` split from a single ~1,700-line file into
   `tamis/controllers/` (`EditController`, `FaceRecognitionController`) plus
   several `tamis/views/` dialog and panel modules, for testability and to
   stop one file from doing six unrelated jobs at once.
-- State files (`.tamis_state.json`, `.tamis_faces.json`,
-  `~/.tamis/people.json.gz`) now write atomically (temp file + rename via
+- State files now write atomically (temp file + rename via
   `tamis/persistence.py`) instead of directly, so a crash or full disk
   mid-write can't corrupt them.
 - Thumbnail generation now uses JPEG draft-mode decoding where safe
