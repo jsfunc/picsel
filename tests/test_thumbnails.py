@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from picsel.thumbnails import generate_thumbnail, load_qimage, pil_to_qimage
+from tamis.thumbnails import generate_thumbnail, load_qimage, pil_to_qimage
 
 
 def _make_image(path: Path, size=(40, 30), color=(10, 20, 30)) -> None:

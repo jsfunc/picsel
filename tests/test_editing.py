@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from picsel.editing import EditSession
+from tamis.editing import EditSession
 
 
 def _make_session(tmp_path: Path, size=(8, 6), color=(10, 20, 30)) -> tuple[EditSession, Path]:
@@ -210,4 +210,4 @@ def test_save_overwrite_does_not_corrupt_original_if_the_write_fails(tmp_path, m
     # The original must be untouched -- save() writes to a temp file first
     # and only replaces the original once the write fully succeeds.
     assert path.read_bytes() == original_bytes
-    assert not list(tmp_path.glob(".picsel_save_*"))  # no leftover temp file either
+    assert not list(tmp_path.glob(".tamis_save_*"))  # no leftover temp file either

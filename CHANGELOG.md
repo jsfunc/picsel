@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to picSel are documented here. Format loosely follows
+All notable changes to Tamis are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); dates are when the
 work landed, not necessarily when a version was tagged.
 
@@ -9,7 +9,7 @@ work landed, not necessarily when a version was tagged.
 A large batch of work: the entire face-recognition feature (already usable,
 behind an optional install) plus a wide-ranging correctness/architecture
 pass. `__version__` has not been bumped for this yet — see
-[picsel/\_\_init\_\_.py](picsel/__init__.py)'s own comment on when to do that.
+[tamis/\_\_init\_\_.py](tamis/__init__.py)'s own comment on when to do that.
 
 ### Added
 
@@ -22,10 +22,10 @@ pass. `__version__` has not been bumped for this yet — see
   and a progressive Search by Name tab. See
   [docs/face_recognition.html](docs/face_recognition.html) for how the
   detection/embedding/identity-matching pipeline actually works.
-- `--version`/`-v` CLI flag, a `Help > About picSel` dialog, and a
+- `--version`/`-v` CLI flag, a `Help > About Tamis` dialog, and a
   versioned window title — previously there was no way to tell which
   release a running copy actually was.
-- Logging to `~/.picsel/picsel.log` plus a global exception handler, so an
+- Logging to `~/.tamis/tamis.log` plus a global exception handler, so an
   uncaught error leaves a diagnostic trail instead of vanishing silently
   (particularly useful for the packaged executable, which has no terminal).
 - A CI workflow (`.github/workflows/tests.yml`) that runs the full test
@@ -41,12 +41,12 @@ pass. `__version__` has not been bumped for this yet — see
 ### Changed
 
 - `main_window.py` split from a single ~1,700-line file into
-  `picsel/controllers/` (`EditController`, `FaceRecognitionController`) plus
-  several `picsel/views/` dialog and panel modules, for testability and to
+  `tamis/controllers/` (`EditController`, `FaceRecognitionController`) plus
+  several `tamis/views/` dialog and panel modules, for testability and to
   stop one file from doing six unrelated jobs at once.
-- State files (`.picsel_state.json`, `.picsel_faces.json`,
-  `~/.picsel/people.json.gz`) now write atomically (temp file + rename via
-  `picsel/persistence.py`) instead of directly, so a crash or full disk
+- State files (`.tamis_state.json`, `.tamis_faces.json`,
+  `~/.tamis/people.json.gz`) now write atomically (temp file + rename via
+  `tamis/persistence.py`) instead of directly, so a crash or full disk
   mid-write can't corrupt them.
 - Thumbnail generation now uses JPEG draft-mode decoding where safe
   (roughly halving folder-open time for large folders), and face-catalog/
@@ -92,7 +92,7 @@ pass. `__version__` has not been bumped for this yet — see
 ## [1.0.0]
 
 - Initial release: browse and rate a folder of photos (filmstrip, EXIF/GPS
-  panel, select/reject/star-rating with a `.picsel_state.json` sidecar),
+  panel, select/reject/star-rating with a `.tamis_state.json` sidecar),
   rotate/flip/crop/adjust with undo-redo, Apply Culling to move or copy
   into `selected/`/`rejected/` subfolders, and three renaming modes
   (sequence, renumber-by-creation-order, rename-by-capture-date). JPEG,

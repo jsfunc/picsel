@@ -1,6 +1,6 @@
-# picSel
+# Tamis
 
-picSel is a small desktop app for quickly culling and lightly editing a folder of
+Tamis is a small desktop app for quickly culling and lightly editing a folder of
 photos: browse a shoot, mark shots as selected/rejected, star-rate them, crop
 or rotate the keepers, and sort the results into folders — all from the
 keyboard, without leaving a single window.
@@ -10,7 +10,7 @@ keyboard, without leaving a single window.
 - **Browse & rate** — filmstrip of thumbnails, full-size preview, EXIF/GPS
   metadata panel. Mark each photo selected, rejected, or unrated, and give it
   a 0-5 star rating. Ratings and status persist alongside the folder (a
-  `.picsel_state.json` sidecar) so you can close and resume later.
+  `.tamis_state.json` sidecar) so you can close and resume later.
 - **Edit** — rotate, flip, crop, and adjust brightness/contrast/saturation,
   with undo/redo. Save as a copy, overwrite the original, or save as a new
   file.
@@ -96,8 +96,8 @@ python -m pytest
 ## Standalone executables
 
 Before tagging a release, bump `__version__` in
-[picsel/\_\_init\_\_.py](picsel/__init__.py) to match — it drives the window
-title, `Help > About picSel`, and `python main.py --version`, but nothing
+[tamis/\_\_init\_\_.py](tamis/__init__.py) to match — it drives the window
+title, `Help > About Tamis`, and `python main.py --version`, but nothing
 derives it from the git tag automatically.
 
 Pushing a tag like `v1.0.0` triggers [.github/workflows/release.yml](.github/workflows/release.yml),
@@ -118,10 +118,10 @@ To build one locally instead:
 ```bash
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-pyinstaller picsel.spec
+pyinstaller tamis.spec
 ```
 
-The executable is written to `dist/picSel` (`dist/picSel.exe` on Windows).
+The executable is written to `dist/Tamis` (`dist/Tamis.exe` on Windows).
 PyInstaller doesn't cross-compile, so this must be run on each target OS.
 
 ## License

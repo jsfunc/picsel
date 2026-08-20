@@ -2,7 +2,7 @@ import pytest
 
 pytest.importorskip("torch")  # SearchPanel imports FolderSearchWorker, which needs it
 
-from picsel.views.search_panel import SearchPanel  # noqa: E402
+from tamis.views.search_panel import SearchPanel  # noqa: E402
 
 
 class _FakeLibrary:

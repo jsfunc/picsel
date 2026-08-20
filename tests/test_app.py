@@ -4,7 +4,7 @@ import sys
 import pytest
 from PySide6.QtWidgets import QMessageBox
 
-import picsel.app as app_module
+import tamis.app as app_module
 
 
 @pytest.fixture(autouse=True)
@@ -23,18 +23,18 @@ def _reset_logging():
 
 
 def test_configure_logging_creates_a_persistent_log_file(tmp_path, monkeypatch):
-    log_path = tmp_path / ".picsel" / "picsel.log"
+    log_path = tmp_path / ".tamis" / "tamis.log"
     monkeypatch.setattr(app_module, "LOG_PATH", log_path)
 
     app_module._configure_logging()
-    logging.getLogger("picsel.somewhere").warning("a warning that must not vanish")
+    logging.getLogger("tamis.somewhere").warning("a warning that must not vanish")
 
     assert log_path.exists()
     assert "a warning that must not vanish" in log_path.read_text()
 
 
 def test_exception_hook_logs_and_shows_a_dialog_instead_of_crashing_silently(tmp_path, monkeypatch):
-    log_path = tmp_path / ".picsel" / "picsel.log"
+    log_path = tmp_path / ".tamis" / "tamis.log"
     monkeypatch.setattr(app_module, "LOG_PATH", log_path)
     app_module._configure_logging()
     app_module._install_exception_hook()
@@ -58,7 +58,7 @@ def test_exception_hook_logs_and_shows_a_dialog_instead_of_crashing_silently(tmp
 
 
 def test_exception_hook_does_not_intercept_keyboard_interrupt(tmp_path, monkeypatch):
-    log_path = tmp_path / ".picsel" / "picsel.log"
+    log_path = tmp_path / ".tamis" / "tamis.log"
     monkeypatch.setattr(app_module, "LOG_PATH", log_path)
     app_module._configure_logging()
     app_module._install_exception_hook()

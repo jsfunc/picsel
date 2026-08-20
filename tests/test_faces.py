@@ -7,9 +7,9 @@ pytest.importorskip("torch")  # recognition deps are optional; see requirements-
 
 from PIL import Image  # noqa: E402
 
-import picsel.recognition.faces as faces_module  # noqa: E402
-from picsel.recognition.detector import FaceDetection  # noqa: E402
-from picsel.recognition.faces import FACES_FILENAME, FaceCatalog, FaceRecord  # noqa: E402
+import tamis.recognition.faces as faces_module  # noqa: E402
+from tamis.recognition.detector import FaceDetection  # noqa: E402
+from tamis.recognition.faces import FACES_FILENAME, FaceCatalog, FaceRecord  # noqa: E402
 
 
 def _make_image(path: Path) -> None:
@@ -35,6 +35,44 @@ def test_faces_for_runs_detection_only_once_per_image(tmp_path, monkeypatch):
     catalog.faces_for(path)
 
     assert len(calls) == 1
+
+
+def test_load_migrates_the_pre_rename_faces_filename(tmp_path):
+    # Regression test: folders scanned before the picSel -> Tamis rename have
+    # a .picsel_faces.json sidecar instead of .tamis_faces.json -- cached
+    # detections must keep loading with no user action, not silently vanish
+    # (forcing an unnecessary and possibly slow re-detection) because the
+    # app is now looking for a different filename.
+    entry = {
+        "box": [1, 2, 3, 4],
+        "confidence": 0.9,
+        "embedding": [0.1] * 512,
+        "dismissed": False,
+        "person_id": None,
+    }
+    (tmp_path / ".picsel_faces.json").write_text(json.dumps({"photo.jpg": [entry]}))
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+
+    assert catalog.load_error is None
+    assert "photo.jpg" in catalog._records
+    assert catalog._records["photo.jpg"][0].box == (1, 2, 3, 4)
+    assert (tmp_path / FACES_FILENAME).exists()
+    assert not (tmp_path / ".picsel_faces.json").exists()  # renamed in place, not copied
+
+
+def test_load_prefers_the_new_faces_filename_if_both_exist(tmp_path):
+    new_entry = {"box": [9, 9, 9, 9], "confidence": 0.5, "embedding": [0.2] * 512, "dismissed": False, "person_id": None}
+    old_entry = {"box": [1, 1, 1, 1], "confidence": 0.5, "embedding": [0.1] * 512, "dismissed": False, "person_id": None}
+    (tmp_path / FACES_FILENAME).write_text(json.dumps({"photo.jpg": [new_entry]}))
+    (tmp_path / ".picsel_faces.json").write_text(json.dumps({"photo.jpg": [old_entry]}))
+
+    catalog = FaceCatalog()
+    catalog.load(tmp_path)
+
+    assert catalog._records["photo.jpg"][0].box == (9, 9, 9, 9)
+    assert (tmp_path / ".picsel_faces.json").exists()  # left alone, not migrated over the newer file
 
 
 def test_load_corrupted_state_file_sets_load_error(tmp_path):
@@ -214,7 +252,7 @@ def test_dismiss_hides_a_detector_face_from_visible_faces(tmp_path):
     _make_image(path)
     # Seed a detector-found record directly (a blank synthetic image has no
     # real face to detect), matching what `load()` would parse from a
-    # previously-saved .picsel_faces.json.
+    # previously-saved .tamis_faces.json.
     (tmp_path / FACES_FILENAME).write_text(
         json.dumps(
             {
@@ -322,7 +360,7 @@ def test_save_writes_atomically(tmp_path, monkeypatch):
     # The original must be untouched -- save() writes to a temp file first
     # and only replaces the original once the write fully succeeds.
     assert state_path.read_bytes() == original_bytes
-    assert not list(tmp_path.glob(".picsel_write_*"))
+    assert not list(tmp_path.glob(".tamis_write_*"))
 
 
 def test_remap_person_updates_matching_records_only(tmp_path):

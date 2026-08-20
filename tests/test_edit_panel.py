@@ -1,6 +1,6 @@
 import time
 
-from picsel.views.edit_panel import SLIDER_DEFAULT, EditPanel
+from tamis.views.edit_panel import SLIDER_DEFAULT, EditPanel
 
 
 def test_keyboard_driven_slider_change_eventually_commits(qapp):

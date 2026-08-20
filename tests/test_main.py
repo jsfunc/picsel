@@ -2,7 +2,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from picsel import __version__
+from tamis import __version__
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -16,4 +16,4 @@ def test_version_flag_prints_version_and_exits_without_opening_a_window():
         timeout=30,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == f"picSel {__version__}"
+    assert result.stdout.strip() == f"Tamis {__version__}"

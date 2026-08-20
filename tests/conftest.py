@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 # Must be set before any PySide6 import happens (anywhere, including inside
-# picsel modules imported by test files below) -- there's no display in a
+# tamis modules imported by test files below) -- there's no display in a
 # test/CI environment, and the offscreen platform plugin needs to be chosen
 # before QApplication is ever touched.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -27,15 +27,15 @@ def qapp():
 def main_window(qapp, tmp_path):
     """A real MainWindow, safe to construct in tests: PersonGallery's default
     path is redirected to an isolated tmp_path location first, so no test
-    can ever read from or overwrite the real ~/.picsel/people.json.gz --
+    can ever read from or overwrite the real ~/.tamis/people.json.gz --
     MainWindow.__init__ takes no constructor parameters, so this is the only
     way to make it safe (see the "no injectable paths" finding from the
     architecture review). PersonGallery itself is only imported inside
     FaceRecognitionController now (main_window.py delegates face-recognition
     state to it), so that's what needs patching, not main_window directly.
     """
-    import picsel.controllers.face_recognition_controller as face_ctl_module
-    import picsel.main_window as mw_module
+    import tamis.controllers.face_recognition_controller as face_ctl_module
+    import tamis.main_window as mw_module
 
     original_defaults = face_ctl_module.PersonGallery.__init__.__defaults__
     face_ctl_module.PersonGallery.__init__.__defaults__ = (tmp_path / "people.json.gz",)

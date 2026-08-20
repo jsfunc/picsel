@@ -1,7 +1,7 @@
 from PySide6.QtCore import QEvent, QPoint, QPointF, QSize, Qt
 from PySide6.QtGui import QImage, QMouseEvent, QResizeEvent, QWheelEvent
 
-from picsel.views.image_viewer import ImageViewer
+from tamis.views.image_viewer import ImageViewer
 
 
 def _make_qimage(w: int = 200, h: int = 100) -> QImage:

@@ -2,7 +2,8 @@ import pytest
 
 np = pytest.importorskip("numpy")  # PersonGallery only needs numpy, but keep it optional like the rest of recognition
 
-from picsel.recognition.gallery import PersonGallery  # noqa: E402
+import tamis.recognition.gallery as gallery_module  # noqa: E402
+from tamis.recognition.gallery import PersonGallery  # noqa: E402
 
 
 def _empty_gallery(tmp_path):
@@ -321,7 +322,7 @@ def test_save_writes_atomically(tmp_path, monkeypatch):
     # The original must be untouched -- save() writes to a temp file first
     # and only replaces the original once the write fully succeeds.
     assert path.read_bytes() == original_bytes
-    assert not list(tmp_path.glob(".picsel_write_*"))
+    assert not list(tmp_path.glob(".tamis_write_*"))
 
 
 def test_load_migrates_from_legacy_uncompressed_file_without_deleting_it(tmp_path):
@@ -343,6 +344,58 @@ def test_load_migrates_from_legacy_uncompressed_file_without_deleting_it(tmp_pat
 
     reloaded = PersonGallery(path=gz_path)
     assert [p.name for p in reloaded.people] == ["Alice"]
+
+
+def test_load_migrates_from_the_pre_rename_picsel_directory(tmp_path, monkeypatch):
+    import gzip
+    import json
+
+    # Only the real DEFAULT_GALLERY_PATH falls back to the pre-rename
+    # (picSel -> Tamis) ~/.picsel/ location -- a caller-supplied custom path
+    # (every other test in this file) must never consult it. Monkeypatch
+    # both module-level path constants to isolated tmp_path locations so
+    # this test can exercise that exact branch without touching the real
+    # home directory.
+    new_path = tmp_path / "tamis" / "people.json.gz"
+    legacy_path = tmp_path / "picsel" / "people.json.gz"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_bytes(
+        gzip.compress(
+            json.dumps({"people": [{"id": "abc123", "name": "Alice", "embeddings": [[0.0] * 512]}]}).encode()
+        )
+    )
+    monkeypatch.setattr(gallery_module, "DEFAULT_GALLERY_PATH", new_path)
+    monkeypatch.setattr(gallery_module, "_LEGACY_GALLERY_PATH", legacy_path)
+
+    gallery = PersonGallery(path=new_path)
+
+    assert [p.name for p in gallery.people] == ["Alice"]
+    assert not new_path.exists()  # read-only migration check, nothing written yet
+    assert legacy_path.exists()  # left in place, not deleted
+
+    gallery.save()
+
+    assert new_path.exists()
+
+
+def test_load_does_not_consult_the_legacy_picsel_path_for_a_custom_path(tmp_path, monkeypatch):
+    # The pre-rename fallback is gated to DEFAULT_GALLERY_PATH specifically --
+    # a custom path (what every test in this file normally uses, and what
+    # the real app uses for a test/throwaway PersonGallery) must never reach
+    # for it, even if it happens to exist.
+    import gzip
+    import json
+
+    real_legacy_path = tmp_path / "picsel_home" / "people.json.gz"
+    real_legacy_path.parent.mkdir(parents=True)
+    real_legacy_path.write_bytes(
+        gzip.compress(json.dumps({"people": [{"id": "x", "name": "ShouldNotAppear", "embeddings": []}]}).encode())
+    )
+    monkeypatch.setattr(gallery_module, "_LEGACY_GALLERY_PATH", real_legacy_path)
+
+    gallery = PersonGallery(path=tmp_path / "custom" / "people.json.gz")
+
+    assert gallery.people == []
 
 
 def test_export_then_import_into_a_fresh_gallery(tmp_path):

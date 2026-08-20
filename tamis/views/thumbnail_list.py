@@ -1,0 +1,152 @@
+"""Horizontal filmstrip of thumbnails with async loading and status badges."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import QRectF, QSize, Qt, QThreadPool
+from PySide6.QtGui import QFontMetrics, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
+
+from tamis.models.image_item import ImageItem, Status
+from tamis.thumbnails import ThumbnailWorker
+from tamis.views.theme import (
+    BADGE_TEXT_COLOR,
+    NEUTRAL_TINT,
+    REJECTED_BADGE_COLOR,
+    REJECTED_TINT,
+    SELECTED_BADGE_COLOR,
+    SELECTED_TINT,
+)
+
+ICON_SIZE = QSize(120, 120)
+
+# The un-badged thumbnail pixmap, cached per item so a status change can
+# redraw the badge without re-decoding the image from disk.
+_RAW_PIXMAP_ROLE = Qt.ItemDataRole.UserRole + 1
+
+BADGE_DIAMETER = 22
+
+
+def _badged_pixmap(pixmap: QPixmap, status: Status) -> QPixmap:
+    """A copy of `pixmap` with a small check/cross badge in the top-left
+    corner for selected/rejected status -- the background tint alone isn't
+    reliably distinguishable for colorblind users (red/green is the most
+    common form of color vision deficiency), so this adds a shape cue that
+    doesn't depend on color to read."""
+    if status is Status.UNRATED:
+        return pixmap
+    color, glyph = (SELECTED_BADGE_COLOR, "✓") if status is Status.SELECTED else (REJECTED_BADGE_COLOR, "✕")
+
+    badged = QPixmap(pixmap)
+    painter = QPainter(badged)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    circle = QRectF(3, 3, BADGE_DIAMETER, BADGE_DIAMETER)
+    painter.setPen(BADGE_TEXT_COLOR)
+    painter.setBrush(color)
+    painter.drawEllipse(circle)
+    font = painter.font()
+    font.setPixelSize(int(BADGE_DIAMETER * 0.65))
+    font.setBold(True)
+    painter.setFont(font)
+    painter.drawText(circle, Qt.AlignmentFlag.AlignCenter, glyph)
+    painter.end()
+    return badged
+
+
+class ThumbnailList(QListWidget):
+    """Single-row filmstrip; `currentRowChanged` reflects the selected image's index."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setViewMode(QListWidget.ViewMode.IconMode)
+        self.setFlow(QListWidget.Flow.LeftToRight)
+        self.setWrapping(False)
+        self.setMovement(QListWidget.Movement.Static)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setIconSize(ICON_SIZE)
+        # Thumbnails load asynchronously, so an item's size hint changes once its icon
+        # arrives (no icon -> icon). setUniformItemSizes(True) would cache the smaller
+        # pre-icon layout rect and never grow it, squashing the thumbnail into a sliver.
+        self.setUniformItemSizes(False)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Item text can span two lines (filename + star rating); size the grid and
+        # the widget's height around that so items aren't clipped at the bottom.
+        line_height = QFontMetrics(self.font()).height()
+        item_size = QSize(ICON_SIZE.width() + 20, ICON_SIZE.height() + 2 * line_height + 12)
+        self.setGridSize(item_size)
+        scrollbar_height = self.horizontalScrollBar().sizeHint().height()
+        self.setFixedHeight(item_size.height() + scrollbar_height + 2 * self.frameWidth() + 4)
+
+        self._thread_pool = QThreadPool.globalInstance()
+        self._pending_workers: list[ThumbnailWorker] = []
+        self._generation = 0
+
+    def set_items(self, items: list[ImageItem]) -> None:
+        self._generation += 1
+        generation = self._generation
+        # Don't clear _pending_workers here: workers from the previous folder may
+        # still be running on the thread pool. Dropping their only Python reference
+        # would let their `signals` QObject get collected mid-flight, crashing the
+        # worker thread when it later tries to emit. Stale results are already
+        # discarded by the generation check in _on_thumbnail_ready, which also
+        # removes each worker from this list once it actually completes.
+        self.clear()
+        for item in items:
+            list_item = QListWidgetItem(item.name)
+            list_item.setData(Qt.ItemDataRole.UserRole, item)
+            list_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.addItem(list_item)
+            self._request_thumbnail(list_item, item, generation)
+        self.refresh_badges()
+
+    def _request_thumbnail(self, list_item: QListWidgetItem, item: ImageItem, generation: int) -> None:
+        worker = ThumbnailWorker(item.path)
+        self._pending_workers.append(worker)
+        worker.signals.finished.connect(
+            lambda path, image, error, li=list_item, w=worker, gen=generation: self._on_thumbnail_ready(
+                li, image, error, w, gen
+            )
+        )
+        self._thread_pool.start(worker)
+
+    def _on_thumbnail_ready(
+        self, list_item: QListWidgetItem, image: QImage, error: str, worker: ThumbnailWorker, generation: int
+    ) -> None:
+        if worker in self._pending_workers:
+            self._pending_workers.remove(worker)
+        if generation != self._generation:
+            return
+        if image.isNull():
+            list_item.setToolTip(f"Failed to load thumbnail: {error}" if error else "Failed to load thumbnail")
+            return
+        pixmap = QPixmap.fromImage(image)
+        list_item.setData(_RAW_PIXMAP_ROLE, pixmap)
+        img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
+        list_item.setIcon(QIcon(_badged_pixmap(pixmap, img_item.status)))
+
+    def refresh_badges(self) -> None:
+        for i in range(self.count()):
+            list_item = self.item(i)
+            img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
+            label = img_item.name
+            if img_item.rating:
+                label += "\n" + "★" * img_item.rating
+            list_item.setText(label)
+            if img_item.status is Status.SELECTED:
+                list_item.setBackground(SELECTED_TINT)
+            elif img_item.status is Status.REJECTED:
+                list_item.setBackground(REJECTED_TINT)
+            else:
+                list_item.setBackground(NEUTRAL_TINT)
+            raw_pixmap = list_item.data(_RAW_PIXMAP_ROLE)
+            if raw_pixmap is not None:
+                list_item.setIcon(QIcon(_badged_pixmap(raw_pixmap, img_item.status)))
+
+    def select_index(self, index: int) -> None:
+        if 0 <= index < self.count() and self.currentRow() != index:
+            self.blockSignals(True)
+            self.setCurrentRow(index)
+            self.blockSignals(False)
+        if 0 <= index < self.count():
+            self.scrollToItem(self.item(index), QAbstractItemView.ScrollHint.EnsureVisible)

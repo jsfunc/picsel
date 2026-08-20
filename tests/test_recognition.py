@@ -4,8 +4,8 @@ torch = pytest.importorskip("torch")  # recognition deps are optional; see requi
 
 from PIL import Image  # noqa: E402
 
-from picsel.recognition import FaceDetection, detect_faces, embed_faces  # noqa: E402
-from picsel.recognition.embedder import EMBEDDING_SIZE  # noqa: E402
+from tamis.recognition import FaceDetection, detect_faces, embed_faces  # noqa: E402
+from tamis.recognition.embedder import EMBEDDING_SIZE  # noqa: E402
 
 
 def test_detect_faces_on_blank_image_finds_nothing():

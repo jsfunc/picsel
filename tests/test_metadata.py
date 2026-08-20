@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from picsel.metadata import extract_metadata
+from tamis.metadata import extract_metadata
 
 
 def _sections_dict(sections):

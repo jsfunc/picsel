@@ -7,9 +7,9 @@ pytest.importorskip("torch")  # FaceCatalog transitively needs it; see requireme
 
 from PIL import Image  # noqa: E402
 
-from picsel.recognition.faces import FaceCatalog  # noqa: E402
-from picsel.recognition.gallery import PersonGallery  # noqa: E402
-from picsel.recognition.search import search_person, search_photo  # noqa: E402
+from tamis.recognition.faces import FaceCatalog  # noqa: E402
+from tamis.recognition.gallery import PersonGallery  # noqa: E402
+from tamis.recognition.search import search_person, search_photo  # noqa: E402
 
 
 def _make_image(path: Path) -> None:
@@ -19,7 +19,7 @@ def _make_image(path: Path) -> None:
 def _seed_face(catalog: FaceCatalog, path: Path, box, embedding, *, person_id=None, confidence=0.99):
     """Inject a fully-formed FaceRecord directly, bypassing real detection
     (a blank synthetic image has no real face for MTCNN to find)."""
-    from picsel.recognition.faces import FaceRecord
+    from tamis.recognition.faces import FaceRecord
 
     record = FaceRecord(box=box, confidence=confidence, embedding=embedding, person_id=person_id)
     catalog.faces_for(path)  # ensure the (empty, since no real face) list exists first

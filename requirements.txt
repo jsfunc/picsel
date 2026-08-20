@@ -1,5 +1,5 @@
 # Upper bounds below are precautionary, not a response to any specific
-# known incompatibility -- picSel hasn't actually been tested against the
+# known incompatibility -- Tamis hasn't actually been tested against the
 # next major version of any of these, so the bound just blocks that jump
 # from happening silently on a fresh install. If one starts blocking a real
 # upgrade, that's a sign to go test against the newer version and move the
@@ -9,7 +9,7 @@ PySide6>=6.6,<7
 # empirically (bisecting 10.0 through 12.3) that Exif.get_ifd() fails to
 # retrieve a freshly-loaded image's sub-IFD contents at all below 11.1,
 # silently dropping DateTimeOriginal/GPS/exposure metadata (which live in
-# those sub-IFDs, not IFD0) from every photo picSel saves after an edit.
+# those sub-IFDs, not IFD0) from every photo Tamis saves after an edit.
 # See editing/operations.py's EditSession.save() for the full explanation.
 Pillow>=11.1,<12
 pillow-heif>=0.15,<1

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>picSel — Face Detection &amp; Recognition</title>
+<title>Tamis — Face Detection &amp; Recognition</title>
 <style>
   :root {
     --bg: #ffffff;
@@ -174,8 +174,8 @@
 <div class="page">
 
 <header class="hero">
-  <h1>Face Detection &amp; Recognition in picSel</h1>
-  <p class="subtitle">How picSel finds faces in your photos and learns to recognize who's in them — the tools, the architectures behind them, and where the design choices came from.</p>
+  <h1>Face Detection &amp; Recognition in Tamis</h1>
+  <p class="subtitle">How Tamis finds faces in your photos and learns to recognize who's in them — the tools, the architectures behind them, and where the design choices came from.</p>
 </header>
 
 <div class="toc">
@@ -204,13 +204,13 @@
   <div class="step"><span class="n">4</span><strong>Remember</strong><br>save the fingerprint under that name for next time</div>
 </div>
 <p>
-  picSel runs entirely on your own machine using <a href="https://pytorch.org">PyTorch</a> — no photo or face data is ever sent anywhere. Detection and embedding both come from the
-  <a href="https://github.com/timesler/facenet-pytorch"><code>facenet-pytorch</code></a> library, which packages two well-established, pretrained neural networks behind a simple API. picSel doesn't train either of those networks from scratch — it uses them exactly as published, and instead does its own lightweight, growable bookkeeping on top (the "gallery" of known people), described in <a href="#identity">Identity matching</a> below.
+  Tamis runs entirely on your own machine using <a href="https://pytorch.org">PyTorch</a> — no photo or face data is ever sent anywhere. Detection and embedding both come from the
+  <a href="https://github.com/timesler/facenet-pytorch"><code>facenet-pytorch</code></a> library, which packages two well-established, pretrained neural networks behind a simple API. Tamis doesn't train either of those networks from scratch — it uses them exactly as published, and instead does its own lightweight, growable bookkeeping on top (the "gallery" of known people), described in <a href="#identity">Identity matching</a> below.
 </p>
 
 <h2 id="detection">Face detection — MTCNN</h2>
 <p>
-  Finding faces in an arbitrary photo — as opposed to identifying <em>whose</em> faces they are — is a generic, well-solved computer vision problem. picSel uses <strong>MTCNN</strong> (Multi-task Cascaded Convolutional Networks), a detector published in 2016 that's still a common, lightweight default choice for this exact task.
+  Finding faces in an arbitrary photo — as opposed to identifying <em>whose</em> faces they are — is a generic, well-solved computer vision problem. Tamis uses <strong>MTCNN</strong> (Multi-task Cascaded Convolutional Networks), a detector published in 2016 that's still a common, lightweight default choice for this exact task.
 </p>
 <div class="card">
   <h4>Architecture</h4>
@@ -225,14 +225,14 @@
   <p>Each stage only has to look closely at what the previous stage already thinks is plausible, which is what makes the whole cascade fast despite being three networks deep.</p>
 </div>
 <p>
-  picSel's wrapper lives in <code class="file-path">picsel/recognition/detector.py</code>. Two implementation choices are worth calling out, because they came from bugs found while testing on real photos rather than from the library's defaults:
+  Tamis's wrapper lives in <code class="file-path">tamis/recognition/detector.py</code>. Two implementation choices are worth calling out, because they came from bugs found while testing on real photos rather than from the library's defaults:
 </p>
 <ul>
   <li>
     <strong>Full resolution, not a downscaled copy.</strong> Detection originally ran on a photo resized to 1600px for speed, but that put detected boxes in a different coordinate space than what's actually displayed and cropped elsewhere in the app — a downscaled detection pass would silently misplace box overlays (and any manually-drawn "add a face here" box). Detection now runs on exactly the same full-resolution image the rest of the app uses, at a real but acceptable cost (a few hundred milliseconds per photo on a modern GPU).
   </li>
   <li>
-    <strong>A loosened cascade, with confidence exposed rather than filtered.</strong> MTCNN's default thresholds (<code>[0.6, 0.7, 0.7]</code>) reject a candidate outright at any stage — which turned out to silently drop a real, partially-occluded face (sunglasses + a cap) that only scored 0.698 on a full re-run. picSel loosens the cascade (<code>[0.5, 0.5, 0.3]</code>) so every candidate reaches a final score instead of being discarded mid-pipeline, and returns <em>all</em> of them unfiltered. The confidence threshold shown in the app's Faces panel is then a pure, free filter over that already-computed list — moving the slider never re-runs detection.
+    <strong>A loosened cascade, with confidence exposed rather than filtered.</strong> MTCNN's default thresholds (<code>[0.6, 0.7, 0.7]</code>) reject a candidate outright at any stage — which turned out to silently drop a real, partially-occluded face (sunglasses + a cap) that only scored 0.698 on a full re-run. Tamis loosens the cascade (<code>[0.5, 0.5, 0.3]</code>) so every candidate reaches a final score instead of being discarded mid-pipeline, and returns <em>all</em> of them unfiltered. The confidence threshold shown in the app's Faces panel is then a pure, free filter over that already-computed list — moving the slider never re-runs detection.
   </li>
 </ul>
 <p>
@@ -253,19 +253,19 @@
     <li><strong>Residual ("ResNet") connections</strong> — each block adds its input back to its output, which lets gradients flow through very deep networks during training without vanishing, and is what makes the "Resnet" half of the name possible at this depth.</li>
   </ul>
   <p>
-    picSel uses the <code>facenet-pytorch</code> build of this network, pretrained on <strong>VGGFace2</strong> — a public dataset of about 3.3 million face photos across roughly 9,000 identities, deliberately varied in pose, age, and lighting so the resulting embedding space generalizes to faces it has never seen. picSel never trains this network itself; it's used exactly as published (transfer learning, not fine-tuning — see <a href="#future">What's not built yet</a>).
+    Tamis uses the <code>facenet-pytorch</code> build of this network, pretrained on <strong>VGGFace2</strong> — a public dataset of about 3.3 million face photos across roughly 9,000 identities, deliberately varied in pose, age, and lighting so the resulting embedding space generalizes to faces it has never seen. Tamis never trains this network itself; it's used exactly as published (transfer learning, not fine-tuning — see <a href="#future">What's not built yet</a>).
   </p>
   <p>
-    VGGFace2 was released by its University of Oxford authors under a non-commercial research-use license — worth knowing since picSel itself is GPLv3 and general-purpose, not research-scoped. This is a documentation note, not legal advice; consult the dataset's own terms if this matters for how you use picSel.
+    VGGFace2 was released by its University of Oxford authors under a non-commercial research-use license — worth knowing since Tamis itself is GPLv3 and general-purpose, not research-scoped. This is a documentation note, not legal advice; consult the dataset's own terms if this matters for how you use Tamis.
   </p>
 </div>
 <p>
-  In <code class="file-path">picsel/recognition/embedder.py</code>, each detected face is cropped (with a small margin) and normalized using <code>facenet-pytorch</code>'s own <code>extract_face</code>/<code>fixed_image_standardization</code> helpers — reused rather than reimplemented, since getting the exact preprocessing a pretrained model expects right by hand is an easy way to silently degrade its accuracy. The output is one 512-float vector per face, computed once per face and cached (see <a href="#storage">Where everything is stored</a>) rather than recomputed every time a photo is viewed.
+  In <code class="file-path">tamis/recognition/embedder.py</code>, each detected face is cropped (with a small margin) and normalized using <code>facenet-pytorch</code>'s own <code>extract_face</code>/<code>fixed_image_standardization</code> helpers — reused rather than reimplemented, since getting the exact preprocessing a pretrained model expects right by hand is an easy way to silently degrade its accuracy. The output is one 512-float vector per face, computed once per face and cached (see <a href="#storage">Where everything is stored</a>) rather than recomputed every time a photo is viewed.
 </p>
 
 <h2 id="identity">Identity matching — an open-set gallery, not a classifier</h2>
 <p>
-  A conventional face-recognition classifier has one output per known person, which means adding someone new means resizing and retraining that output layer. picSel avoids that entirely: a person's identity is just a <em>growable list of embedding samples</em> (<code class="file-path">picsel/recognition/gallery.py</code>, class <code>PersonGallery</code>). Labeling a face adds one more sample to that list — no retraining, ever, no matter how many people you add.
+  A conventional face-recognition classifier has one output per known person, which means adding someone new means resizing and retraining that output layer. Tamis avoids that entirely: a person's identity is just a <em>growable list of embedding samples</em> (<code class="file-path">tamis/recognition/gallery.py</code>, class <code>PersonGallery</code>). Labeling a face adds one more sample to that list — no retraining, ever, no matter how many people you add.
 </p>
 <p>Matching a new face against the gallery is <strong>k-nearest-neighbors</strong> in embedding space, using <a href="https://en.wikipedia.org/wiki/Cosine_similarity">cosine similarity</a> as the distance metric:</p>
 <ul>
@@ -281,13 +281,13 @@
   <tr><th>What</th><th>Where</th><th>Scope</th></tr>
   <tr>
     <td>Known people + their reference embeddings</td>
-    <td><code>~/.picsel/people.json.gz</code></td>
+    <td><code>~/.tamis/people.json.gz</code></td>
     <td>One file, shared across your whole photo library</td>
   </tr>
   <tr>
     <td>Detected/labeled faces per photo</td>
-    <td><code>&lt;folder&gt;/.picsel_faces.json</code></td>
-    <td>One file per photo folder, next to the photos (mirrors the existing <code>.picsel_state.json</code> convention used for culling/ratings)</td>
+    <td><code>&lt;folder&gt;/.tamis_faces.json</code></td>
+    <td>One file per photo folder, next to the photos (mirrors the existing <code>.tamis_state.json</code> convention used for culling/ratings)</td>
   </tr>
 </table>
 <p>
@@ -299,7 +299,7 @@
 
 <h2 id="hardware">Hardware &amp; performance</h2>
 <p>
-  Both networks run on whichever device PyTorch reports as available — an NVIDIA GPU via CUDA if present, otherwise the CPU, chosen automatically at import time (<code>picsel/recognition/detector.py</code>: <code>DEVICE = "cuda" if torch.cuda.is_available() else "cpu"</code>). No configuration is needed either way.
+  Both networks run on whichever device PyTorch reports as available — an NVIDIA GPU via CUDA if present, otherwise the CPU, chosen automatically at import time (<code>tamis/recognition/detector.py</code>: <code>DEVICE = "cuda" if torch.cuda.is_available() else "cpu"</code>). No configuration is needed either way.
 </p>
 <p>
   On a modern GPU, detecting and embedding all the faces in a typical photo takes roughly 200–650ms depending on resolution and how many faces are present; on CPU it's slower but still workable, since it always runs on a background thread and never blocks the UI. The very first detection after starting the app can take noticeably longer on some GPUs while CUDA JIT-compiles kernels for that specific hardware — a one-time cost per app run, not per photo.
@@ -314,7 +314,7 @@
   <li>Two different siblings in the <em>same</em> photo scored <strong>0.61</strong> against each other — higher than one of the genuine same-person matches above.</li>
 </ul>
 <p>
-  Because of that overlap, picSel doesn't hide a suggestion just because it's below some fixed number. Suggestions are always shown, colored on a continuous
+  Because of that overlap, Tamis doesn't hide a suggestion just because it's below some fixed number. Suggestions are always shown, colored on a continuous
   <span class="swatch" style="background:#c23b3b"></span>red‑to‑<span class="swatch" style="background:#1f8b4c"></span>green scale by similarity, and left for you to judge — with a tunable similarity slider (in <em>Search by Name</em>) and confidence slider (in the Faces panel) for cases where you want to cast a wider or narrower net.
 </p>
 
@@ -335,7 +335,7 @@
 </ul>
 
 <footer>
-  picSel is a local, offline photo culling and editing app — face recognition runs entirely on your own machine, and no photo or face data leaves it.
+  Tamis is a local, offline photo culling and editing app — face recognition runs entirely on your own machine, and no photo or face data leaves it.
 </footer>
 
 </div>

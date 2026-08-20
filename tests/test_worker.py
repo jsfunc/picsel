@@ -5,8 +5,8 @@ import pytest
 pytest.importorskip("numpy")
 pytest.importorskip("torch")
 
-from picsel.recognition.gallery import PersonGallery  # noqa: E402
-from picsel.recognition.worker import FolderSearchWorker  # noqa: E402
+from tamis.recognition.gallery import PersonGallery  # noqa: E402
+from tamis.recognition.worker import FolderSearchWorker  # noqa: E402
 
 
 def test_one_photo_raising_does_not_abort_the_rest_of_the_search(monkeypatch, tmp_path, qapp):
@@ -24,7 +24,7 @@ def test_one_photo_raising_does_not_abort_the_rest_of_the_search(monkeypatch, tm
             raise RuntimeError("corrupted photo")
         return [f"hit-for-{path.name}"]
 
-    monkeypatch.setattr("picsel.recognition.worker.search_photo", fake_search_photo)
+    monkeypatch.setattr("tamis.recognition.worker.search_photo", fake_search_photo)
 
     worker = FolderSearchWorker(
         catalog=None,  # never touched directly -- search_photo is monkeypatched

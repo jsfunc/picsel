@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from picsel.persistence import atomic_write_bytes
+from tamis.persistence import atomic_write_bytes
 
 
 def test_atomic_write_bytes_writes_the_file(tmp_path):
@@ -37,4 +37,4 @@ def test_atomic_write_bytes_does_not_corrupt_the_original_if_the_write_fails(tmp
         atomic_write_bytes(path, b"new")
 
     assert path.read_bytes() == b"original"
-    assert not list(tmp_path.glob(".picsel_write_*"))
+    assert not list(tmp_path.glob(".tamis_write_*"))

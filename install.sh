@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installation script for picSel.
+# Installation script for Tamis.
 # Checks requirements and creates a Python virtual environment with dependencies installed.
 set -euo pipefail
 
@@ -140,5 +140,5 @@ fi
 info "Installation complete."
 info "Activate the virtual environment with:"
 info "  source ${VENV_DIR}/bin/activate"
-info "Then run picSel with:"
+info "Then run Tamis with:"
 info "  python main.py [folder]"

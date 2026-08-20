@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from picsel.models import ImageItem, ImageLibrary, Status
+from tamis.models import ImageItem, ImageLibrary, Status
 
 
 def _make_image(path: Path, size=(4, 4), color=(255, 0, 0)) -> None:
@@ -65,7 +65,7 @@ def test_library_state_roundtrip(tmp_path):
     assert by_name["a.jpg"].rating == 4
     assert by_name["b.jpg"].status is Status.REJECTED
 
-    state = json.loads((tmp_path / ".picsel_state.json").read_text())
+    state = json.loads((tmp_path / ".tamis_state.json").read_text())
     assert state["a.jpg"] == {"status": "selected", "rating": 4}
 
 
@@ -76,15 +76,46 @@ def test_load_missing_state_file_leaves_load_error_none(tmp_path):
     assert library.load_error is None
 
 
+def test_load_migrates_the_pre_rename_state_filename(tmp_path):
+    # Regression test: folders opened before the picSel -> Tamis rename have
+    # a .picsel_state.json sidecar instead of .tamis_state.json -- existing
+    # ratings/status must keep working with no user action, not silently
+    # reset to unrated because the app is now looking for a different name.
+    _make_image(tmp_path / "a.jpg")
+    (tmp_path / ".picsel_state.json").write_text(json.dumps({"a.jpg": {"status": "selected", "rating": 4}}))
+
+    library = ImageLibrary()
+    library.load(tmp_path)
+
+    assert library.load_error is None
+    assert library.items[0].status is Status.SELECTED
+    assert library.items[0].rating == 4
+    assert (tmp_path / ".tamis_state.json").exists()
+    assert not (tmp_path / ".picsel_state.json").exists()  # renamed in place, not copied
+
+
+def test_load_prefers_the_new_state_filename_if_both_exist(tmp_path):
+    _make_image(tmp_path / "a.jpg")
+    (tmp_path / ".tamis_state.json").write_text(json.dumps({"a.jpg": {"status": "rejected", "rating": 2}}))
+    (tmp_path / ".picsel_state.json").write_text(json.dumps({"a.jpg": {"status": "selected", "rating": 5}}))
+
+    library = ImageLibrary()
+    library.load(tmp_path)
+
+    assert library.items[0].status is Status.REJECTED
+    assert library.items[0].rating == 2
+    assert (tmp_path / ".picsel_state.json").exists()  # left alone, not migrated over the newer file
+
+
 def test_load_corrupted_state_file_sets_load_error(tmp_path):
     _make_image(tmp_path / "a.jpg")
-    (tmp_path / ".picsel_state.json").write_text("not valid json{{{")
+    (tmp_path / ".tamis_state.json").write_text("not valid json{{{")
 
     library = ImageLibrary()
     library.load(tmp_path)
 
     assert library.load_error is not None
-    assert str(tmp_path / ".picsel_state.json") in library.load_error
+    assert str(tmp_path / ".tamis_state.json") in library.load_error
     assert library.items[0].status is Status.UNRATED  # degraded to unrated, not crashed
 
 
@@ -93,7 +124,7 @@ def test_load_non_dict_state_file_sets_load_error_instead_of_raising(tmp_path):
     # conflict copy) must degrade gracefully, not crash folder-open with an
     # AttributeError from treating a list/null as a dict.
     _make_image(tmp_path / "a.jpg")
-    (tmp_path / ".picsel_state.json").write_text("[]")
+    (tmp_path / ".tamis_state.json").write_text("[]")
 
     library = ImageLibrary()
     library.load(tmp_path)  # must not raise
@@ -103,7 +134,7 @@ def test_load_non_dict_state_file_sets_load_error_instead_of_raising(tmp_path):
 
 
 def test_load_error_resets_on_a_later_successful_load(tmp_path):
-    (tmp_path / ".picsel_state.json").write_text("not valid json{{{")
+    (tmp_path / ".tamis_state.json").write_text("not valid json{{{")
     other = tmp_path / "other"
     other.mkdir()
 
@@ -121,7 +152,7 @@ def test_save_state_writes_atomically(tmp_path, monkeypatch):
     library.load(tmp_path)
     library.set_status(0, Status.SELECTED)
     library.save_state()
-    original_bytes = (tmp_path / ".picsel_state.json").read_bytes()
+    original_bytes = (tmp_path / ".tamis_state.json").read_bytes()
 
     library.set_status(0, Status.REJECTED)
 
@@ -145,7 +176,7 @@ def test_save_state_writes_atomically(tmp_path, monkeypatch):
 
     # The original must be untouched -- save_state() writes to a temp file
     # first and only replaces the original once the write fully succeeds.
-    assert (tmp_path / ".picsel_state.json").read_bytes() == original_bytes
+    assert (tmp_path / ".tamis_state.json").read_bytes() == original_bytes
 
 
 def test_library_counts(tmp_path):

@@ -8,10 +8,10 @@ pytest.importorskip("torch")  # face recognition deps are optional; see requirem
 from PIL import Image  # noqa: E402
 from PySide6.QtWidgets import QDialog, QMessageBox  # noqa: E402
 
-import picsel.controllers.face_recognition_controller as face_ctl_module  # noqa: E402
-import picsel.main_window as mw_module  # noqa: E402
-from picsel import __version__  # noqa: E402
-from picsel.models import Status  # noqa: E402
+import tamis.controllers.face_recognition_controller as face_ctl_module  # noqa: E402
+import tamis.main_window as mw_module  # noqa: E402
+from tamis import __version__  # noqa: E402
+from tamis.models import Status  # noqa: E402
 
 
 def _make_photos(folder: Path, count: int = 2) -> None:
@@ -284,7 +284,7 @@ def test_face_filter_slider_is_debounced(main_window, tmp_path, qapp):
 
 
 def test_window_title_includes_the_version(main_window):
-    assert main_window.windowTitle() == f"picSel {__version__}"
+    assert main_window.windowTitle() == f"Tamis {__version__}"
 
 
 def test_about_dialog_shows_the_version(main_window, monkeypatch):
@@ -297,7 +297,7 @@ def test_about_dialog_shows_the_version(main_window, monkeypatch):
 
     assert shown
     title, text = shown[0]
-    assert title == "About picSel"
+    assert title == "About Tamis"
     assert __version__ in text
 
 
@@ -312,7 +312,7 @@ def test_apply_culling_move_does_not_leave_a_stale_rating_for_the_moved_photo(
 ):
     # Regression test: save_state() previously ran *before* the post-move
     # reload, while self.library.items still listed the just-moved photo --
-    # writing its rating into the parent folder's .picsel_state.json even
+    # writing its rating into the parent folder's .tamis_state.json even
     # though the photo no longer lives there. If a future photo reused that
     # exact filename in this folder, it would silently inherit the stale
     # rating/status.
@@ -327,7 +327,7 @@ def test_apply_culling_move_does_not_leave_a_stale_rating_for_the_moved_photo(
     _auto_accept_apply_culling(monkeypatch)
     main_window._apply_culling()
 
-    state_path = photos / ".picsel_state.json"
+    state_path = photos / ".tamis_state.json"
     if state_path.exists():
         assert moved_name not in state_path.read_text()
     assert (photos / "selected" / moved_name).exists()
@@ -354,7 +354,7 @@ def test_apply_culling_move_invalidates_cached_face_data_for_the_moved_photo(
     _auto_accept_apply_culling(monkeypatch)
     main_window._apply_culling()
 
-    faces_path = photos / ".picsel_faces.json"
+    faces_path = photos / ".tamis_faces.json"
     if faces_path.exists():
         assert moved_name not in faces_path.read_text()
     assert moved_name not in main_window.face_ctl.face_catalog._records

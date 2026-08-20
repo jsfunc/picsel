@@ -2,8 +2,8 @@ from pathlib import Path
 
 from PySide6.QtGui import QColor, QPixmap
 
-from picsel.models.image_item import ImageItem, Status
-from picsel.views.thumbnail_list import _RAW_PIXMAP_ROLE, ThumbnailList, _badged_pixmap
+from tamis.models.image_item import ImageItem, Status
+from tamis.views.thumbnail_list import _RAW_PIXMAP_ROLE, ThumbnailList, _badged_pixmap
 
 
 def _solid_pixmap(color=(80, 80, 80), size=60) -> QPixmap:

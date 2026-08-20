@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.tamis_state.json
+.tamis_faces.json
 .picsel_state.json
 .picsel_faces.json
 build/

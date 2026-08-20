@@ -12,11 +12,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            asset_name: picSel-linux-x86_64.tar.gz
+            asset_name: Tamis-linux-x86_64.tar.gz
           - os: windows-latest
-            asset_name: picSel-windows-x86_64.zip
+            asset_name: Tamis-windows-x86_64.zip
           - os: macos-latest
-            asset_name: picSel-macos-arm64.zip
+            asset_name: Tamis-macos-arm64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,24 +42,24 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Build executable
-        run: pyinstaller picsel.spec --noconfirm
+        run: pyinstaller tamis.spec --noconfirm
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          chmod +x dist/picSel
-          tar -C dist -czf ${{ matrix.asset_name }} picSel
+          chmod +x dist/Tamis
+          tar -C dist -czf ${{ matrix.asset_name }} Tamis
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist/picSel.exe -DestinationPath ${{ matrix.asset_name }}
+        run: Compress-Archive -Path dist/Tamis.exe -DestinationPath ${{ matrix.asset_name }}
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
-          chmod +x dist/picSel
-          ditto -c -k dist/picSel ${{ matrix.asset_name }}
+          chmod +x dist/Tamis
+          ditto -c -k dist/Tamis ${{ matrix.asset_name }}
 
       - name: Check the packaged asset size stays reasonable
         shell: bash

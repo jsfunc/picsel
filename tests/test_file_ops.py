@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from picsel.io_ops import (
+from tamis.io_ops import (
     apply_culling,
     capture_time,
     find_sequence_groups,
@@ -14,7 +14,7 @@ from picsel.io_ops import (
     rename_with_sequence,
     unique_path,
 )
-from picsel.models import ImageItem, ImageLibrary, Status
+from tamis.models import ImageItem, ImageLibrary, Status
 
 
 def _make_image(path: Path) -> None:
@@ -134,7 +134,7 @@ def test_apply_culling_cleans_up_a_partial_write_on_failure(tmp_path, monkeypatc
     # detecting or clearing it.
     import shutil
 
-    from picsel.io_ops import file_ops
+    from tamis.io_ops import file_ops
 
     _make_image(tmp_path / "a.jpg")
     library = ImageLibrary()
