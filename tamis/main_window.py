@@ -123,6 +123,9 @@ class MainWindow(QMainWindow):
         self._metadata_load_generation = 0
         self._pending_metadata_workers: list[MetadataLoadWorker] = []
 
+        # Memoized capture times for the open folder; see _capture_time.
+        self._capture_times: dict[Path, float] = {}
+
         self.viewer = ImageViewer()
         self.thumbnail_list = ThumbnailList()
         self.thumbnail_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -342,6 +345,7 @@ class MainWindow(QMainWindow):
             self.face_ctl.save_before_switching_folder()
 
         self.edit_ctl.discard()
+        self._capture_times.clear()  # a different folder's photos, and it is unbounded otherwise
         try:
             self.library.load(folder)
         except OSError as exc:
@@ -515,12 +519,26 @@ class MainWindow(QMainWindow):
 
     # -- Sorting ----------------------------------------------------
 
+    def _capture_time(self, item) -> float:
+        """`capture_time`, memoized for this folder.
+
+        Reading it opens the file and parses its EXIF -- ~2.7ms per photo, so
+        sorting a 584-photo folder froze the window for 1.2-2.1s, and paid it
+        again on every sort because nothing was kept. Keyed by path, so an
+        entry left behind by a rename is simply never looked up again.
+        """
+        cached = self._capture_times.get(item.path)
+        if cached is None:
+            cached = capture_time(item.path)
+            self._capture_times[item.path] = cached
+        return cached
+
     def _sort_key(self, mode: str):
         if mode == "date":
-            return lambda item: capture_time(item.path)
+            return self._capture_time
         if mode == "stars":
             # Highest rating first; break ties by capture time (earliest first).
-            return lambda item: (-item.rating, capture_time(item.path))
+            return lambda item: (-item.rating, self._capture_time(item))
         return lambda item: item.path
 
     def _set_sort_mode(self, mode: str) -> None:
@@ -733,6 +751,13 @@ class MainWindow(QMainWindow):
 
     def _save_edit(self, mode: str) -> None:
         saved_path = self.edit_ctl.save(mode)
+        if saved_path is not None and mode == "overwrite":
+            # The filmstrip still shows this photo decoded from its pre-edit
+            # pixels; re-read it so the thumbnail matches the file.
+            self.thumbnail_list.reload_item(self.library.current_index)
+            # Its capture time may have moved too, if it had no EXIF date and
+            # was therefore being sorted by file mtime.
+            self._capture_times.pop(saved_path, None)
         if saved_path is not None and mode == "overwrite" and RECOGNITION_AVAILABLE:
             # The old cached boxes/embeddings were computed against the
             # pre-edit pixel geometry (rotation/flip/crop) and are now

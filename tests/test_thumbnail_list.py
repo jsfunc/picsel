@@ -109,3 +109,54 @@ def test_refresh_badges_still_redraws_every_row(qapp):
         item.rating = 5
     thumbnail_list.refresh_badges()
     assert all(thumbnail_list.item(i).text().endswith("★★★★★") for i in range(4))
+
+
+def test_set_items_reuses_already_decoded_thumbnails(qapp):
+    # Re-sorting calls set_items with the same photos in a new order; without
+    # a cache that re-decoded the entire folder from disk.
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(4)]
+    thumbnail_list.set_items(items)
+    started = len(thumbnail_list._pending_workers)
+    assert started == 4
+
+    for item in items:
+        thumbnail_list._pixmap_cache[item.path] = _solid_pixmap()
+    thumbnail_list._pending_workers.clear()
+    thumbnail_list.set_items(list(reversed(items)))
+
+    assert thumbnail_list._pending_workers == []
+    assert all(thumbnail_list.item(i).icon() is not None for i in range(4))
+
+
+def test_set_items_drops_cached_thumbnails_for_photos_no_longer_present(qapp):
+    # Otherwise the cache grows across every folder opened in a session.
+    thumbnail_list = ThumbnailList()
+    old_items = [ImageItem(path=Path(f"/tmp/old{i}.jpg")) for i in range(3)]
+    thumbnail_list.set_items(old_items)
+    for item in old_items:
+        thumbnail_list._pixmap_cache[item.path] = _solid_pixmap()
+
+    thumbnail_list.set_items([ImageItem(path=Path("/tmp/new0.jpg"))])
+
+    assert thumbnail_list._pixmap_cache == {}
+
+
+def test_reload_item_forgets_the_cached_thumbnail(qapp):
+    # An overwrite save changes the file's pixels under a cached thumbnail.
+    thumbnail_list = ThumbnailList()
+    item = ImageItem(path=Path("/tmp/img0.jpg"))
+    thumbnail_list.set_items([item])
+    thumbnail_list._pixmap_cache[item.path] = _solid_pixmap()
+    thumbnail_list._pending_workers.clear()
+
+    thumbnail_list.reload_item(0)
+
+    assert item.path not in thumbnail_list._pixmap_cache
+    assert len(thumbnail_list._pending_workers) == 1
+
+
+def test_reload_item_ignores_an_out_of_range_index(qapp):
+    thumbnail_list = ThumbnailList()
+    thumbnail_list.set_items([ImageItem(path=Path("/tmp/a.jpg"))])
+    thumbnail_list.reload_item(42)  # must not raise

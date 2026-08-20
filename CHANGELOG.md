@@ -8,6 +8,18 @@ work landed, not necessarily when a version was tagged.
 
 ### Performance
 
+- **Sorting a folder no longer re-reads every file.** Sorting by date (or by
+  star rating, which breaks ties by date) opened each photo and parsed its
+  EXIF on the UI thread, and kept nothing, so every sort paid it again --
+  1215-2080ms of frozen window per sort on a 584-photo folder. Capture times
+  are now memoized for the open folder.
+- **Re-sorting no longer re-decodes every thumbnail.** Rebuilding the
+  filmstrip discarded all its decoded thumbnails, so each sort re-read the
+  whole folder from disk (565 decodes, 1941ms of redundant work). They are
+  now kept across a re-sort and pruned to the photos actually present, so a
+  folder switch still releases them. Together these take a repeat sort of a
+  584-photo folder from ~1.9s frozen plus ~1.9s of background decoding to
+  ~40ms and no decoding at all.
 - **Marking and rating a photo no longer redraw the whole filmstrip.**
   `S`/`X`/`U`/`0`-`5` rebuilt a badged thumbnail for every photo in the
   folder, so the cost of the app's most repeated keystrokes scaled both with
@@ -28,6 +40,14 @@ work landed, not necessarily when a version was tagged.
 
 ### Fixed
 
+- The filmstrip thumbnail is now re-read after **Overwrite Original**; it
+  previously kept showing the photo as it looked before the edit until the
+  folder was reopened.
+- Documented that PyPI's Windows `torch` wheel is CPU-only, so
+  `pip install -r requirements-recognition.txt` there silently gives CPU
+  inference rather than the CUDA build it does on Linux. This mislabelling
+  is what made 2.1.0's Windows `-recognition-gpu` asset byte-for-byte
+  identical to its `-recognition-cpu` one.
 - **Closing the window during a Search by Name scan waited out the whole
   scan.** The scan runs on the shared thread pool and `closeEvent` blocks on
   `waitForDone()`, which only skips work that hadn't started -- so the window
@@ -35,7 +55,6 @@ work landed, not necessarily when a version was tagged.
   20-photo folder of uncached photos, minutes for a real one). It is now
   cancelled on close, bounding the wait to a single photo: 0.2s, independent
   of folder size.
-
 - **Confirming a face name could permanently duplicate its gallery sample.**
   Merging or forgetting a person only rewrote the face records of whichever
   folder happened to be open at the time, so records in every other folder
@@ -80,14 +99,6 @@ work landed, not necessarily when a version was tagged.
   sizes (lean 200MB, cpu 700MB) instead of pre-CI estimates, and are kept
   below GitHub's 2GiB asset limit. The old GPU budget of 3500MB sat above
   that limit, so it passed an asset that could never actually publish.
-
-### Fixed
-
-- Documented that PyPI's Windows `torch` wheel is CPU-only, so
-  `pip install -r requirements-recognition.txt` there silently gives CPU
-  inference rather than the CUDA build it does on Linux. This mislabelling
-  is what made 2.1.0's Windows `-recognition-gpu` asset byte-for-byte
-  identical to its `-recognition-cpu` one.
 
 ## [2.1.0]
 

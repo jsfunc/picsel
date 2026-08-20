@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QRectF, QSize, Qt, QThreadPool
 from PySide6.QtGui import QFontMetrics, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
@@ -81,10 +83,24 @@ class ThumbnailList(QListWidget):
         self._thread_pool = QThreadPool.globalInstance()
         self._pending_workers: list[ThumbnailWorker] = []
         self._generation = 0
+        # Decoded thumbnails, kept across set_items so a re-sort doesn't
+        # re-decode the folder. Pruned to the current photos on every
+        # set_items, so it stays bounded by folder size (~57KB each).
+        self._pixmap_cache: dict[Path, QPixmap] = {}
 
     def set_items(self, items: list[ImageItem]) -> None:
         self._generation += 1
         generation = self._generation
+        # Re-sorting calls this with the same photos in a different order, and
+        # rebuilding the list drops every decoded thumbnail -- so every sort
+        # used to re-decode the whole folder from disk (measured: 565 decodes,
+        # 1941ms, to reproduce work already done). Keep what we already have,
+        # pruned to the photos actually present, which also releases the old
+        # folder's thumbnails on a folder switch rather than growing forever.
+        incoming = {item.path for item in items}
+        self._pixmap_cache = {
+            path: pixmap for path, pixmap in self._pixmap_cache.items() if path in incoming
+        }
         # Don't clear _pending_workers here: workers from the previous folder may
         # still be running on the thread pool. Dropping their only Python reference
         # would let their `signals` QObject get collected mid-flight, crashing the
@@ -101,6 +117,13 @@ class ThumbnailList(QListWidget):
         self.refresh_badges()
 
     def _request_thumbnail(self, list_item: QListWidgetItem, item: ImageItem, generation: int) -> None:
+        cached = self._pixmap_cache.get(item.path)
+        if cached is not None:
+            # Only the raw pixmap: set_items ends with refresh_badges(), which
+            # draws the badge for every row. Compositing it here as well would
+            # do that twice for the whole folder on every re-sort.
+            list_item.setData(_RAW_PIXMAP_ROLE, cached)
+            return
         worker = ThumbnailWorker(item.path)
         self._pending_workers.append(worker)
         worker.signals.finished.connect(
@@ -121,9 +144,30 @@ class ThumbnailList(QListWidget):
             list_item.setToolTip(f"Failed to load thumbnail: {error}" if error else "Failed to load thumbnail")
             return
         pixmap = QPixmap.fromImage(image)
+        img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
+        self._pixmap_cache[img_item.path] = pixmap
+        self._apply_pixmap(list_item, pixmap)
+
+    def _apply_pixmap(self, list_item: QListWidgetItem, pixmap: QPixmap) -> None:
         list_item.setData(_RAW_PIXMAP_ROLE, pixmap)
         img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
         list_item.setIcon(QIcon(_badged_pixmap(pixmap, img_item.status)))
+
+    def reload_item(self, index: int) -> None:
+        """Re-decode one row's thumbnail because its file changed on disk.
+
+        Needed after an overwrite save: the displayed thumbnail was decoded
+        from the pre-edit pixels. That was already stale before thumbnails
+        were cached (nothing re-read the file until the list was rebuilt);
+        caching would have made it stale until a folder switch, so the
+        invalidation is wired up rather than left implicit.
+        """
+        list_item = self.item(index)
+        if list_item is None:
+            return
+        img_item: ImageItem = list_item.data(Qt.ItemDataRole.UserRole)
+        self._pixmap_cache.pop(img_item.path, None)
+        self._request_thumbnail(list_item, img_item, self._generation)
 
     def refresh_item(self, index: int) -> None:
         """Redraw one row's label, tint and badge.
