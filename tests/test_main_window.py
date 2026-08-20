@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 
@@ -514,3 +515,40 @@ def test_confirming_a_name_on_a_record_naming_a_forgotten_person_does_not_duplic
     alice = gallery.find_by_name("Alice")
     assert len(alice.embeddings) == 1
     assert record.person_id == alice.id
+
+
+def test_an_unreadable_gallery_does_not_wipe_a_folders_face_labels(main_window, tmp_path, monkeypatch):
+    """A gallery that fails to read loads empty, which would make every label
+    in every folder afterwards look like it names a person who no longer
+    exists. Reconciling against that would clear them all and save the result,
+    turning a failed read into permanent data loss.
+    """
+    import numpy as np
+
+    from tamis.recognition.faces import FACES_FILENAME, FaceCatalog, FaceRecord
+
+    ctl = main_window.face_ctl
+    folder = tmp_path / "photos"
+    folder.mkdir()
+
+    person = ctl.person_gallery.add_person("Alice")
+    embedding = np.random.default_rng(0).normal(size=512).astype(np.float32)
+    ctl.person_gallery.add_embedding(person.id, embedding)
+
+    catalog = FaceCatalog()
+    catalog.load(folder)
+    record = FaceRecord(box=(0, 0, 9, 9), confidence=0.99, embedding=embedding)
+    record.person_id = person.id
+    catalog._records["a.jpg"] = [record]
+    catalog.save()
+
+    # Now simulate the gallery file having become unreadable.
+    ctl.person_gallery.people = []
+    ctl.person_gallery.load_error = "could not read the gallery"
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+
+    ctl.load_folder(folder)
+
+    assert ctl.face_catalog._records["a.jpg"][0].person_id == person.id
+    on_disk = json.loads((folder / FACES_FILENAME).read_text())
+    assert on_disk["a.jpg"][0]["person_id"] == person.id

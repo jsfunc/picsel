@@ -261,6 +261,12 @@ class FaceCatalog:
         and since the labeling path reads an unresolvable id as "not labeled
         yet", re-confirming such a face added a second copy of its sample to
         the gallery instead of moving the existing one.
+
+        `known_ids` must come from a gallery that actually loaded. An empty
+        set means "nobody exists", so every label here is cleared -- correct
+        after Forget All Faces, catastrophic if the gallery merely failed to
+        read. The caller is responsible for checking PersonGallery.load_error
+        first; see FaceRecognitionController.load_folder.
         """
         changed = 0
         for records in list(self._records.values()):  # see remap_person for why list(...)

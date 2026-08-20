@@ -694,3 +694,25 @@ def test_merging_two_ids_that_resolve_to_the_same_person_raises(tmp_path):
 
     with pytest.raises(ValueError):
         gallery.merge(keep_id=b.id, remove_id=a.id)  # a now redirects to b
+
+
+def test_a_person_whose_every_sample_was_contested_is_kept_and_revivable(tmp_path):
+    # Deleting would silently discard a name the user typed; with no samples
+    # they simply don't participate in matching until a face is labelled.
+    path = tmp_path / "people.json.gz"
+    gallery = PersonGallery(path=path)
+    rng = np.random.default_rng(0)
+    contested = rng.normal(size=512).astype(np.float32)
+    only = gallery.add_person("OnlyContested")
+    only.embeddings.append(contested)
+    other = gallery.add_person("HasOthers")
+    other.embeddings.extend([contested.copy(), rng.normal(size=512).astype(np.float32)])
+    gallery.save()
+
+    reloaded = PersonGallery(path=path)
+
+    emptied = reloaded.find_by_name("OnlyContested")
+    assert emptied is not None and emptied.embeddings == []
+    assert "OnlyContested" not in [p.name for p, _ in reloaded.rank_all(contested)]
+    reloaded.add_embedding(emptied.id, rng.normal(size=512).astype(np.float32))
+    assert len(emptied.embeddings) == 1

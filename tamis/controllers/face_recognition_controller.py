@@ -106,6 +106,15 @@ class FaceRecognitionController:
         if self.face_catalog.load_error:
             QMessageBox.warning(self.parent_widget, "Face Data", self.face_catalog.load_error)
             return  # nothing was loaded, so there is nothing to reconcile
+        if self.person_gallery.load_error:
+            # The gallery is empty only because its file couldn't be read, not
+            # because there is genuinely nobody in it. Reconciling against it
+            # would read every label in this folder as naming a person who no
+            # longer exists, clear them all, and -- since a change triggers a
+            # save -- write that over the folder's face data permanently. Same
+            # reasoning as every other load_error guard in the app: never let
+            # a failed read become a destructive write.
+            return
         # Apply any merges/forgets done while this folder was closed. Without
         # this they only ever reached the folder that was open at the time,
         # leaving records here naming a person the gallery no longer has.
