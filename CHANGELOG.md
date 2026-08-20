@@ -6,6 +6,8 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+## [2.2.0]
+
 ### Performance
 
 - **Sorting a folder no longer re-reads every file.** Sorting by date (or by
