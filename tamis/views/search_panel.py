@@ -147,11 +147,27 @@ class SearchPanel(QWidget):
         if self._worker is not None and self._worker.person.id in person_ids:
             self._on_cancel_clicked()
 
-    def _on_cancel_clicked(self) -> None:
+    def cancel_search(self) -> None:
+        """Ask any in-flight scan to stop, without waiting for it.
+
+        Public because closing the window has to call it too: the scan runs on
+        the shared thread pool, and `MainWindow.closeEvent` blocks on
+        `waitForDone()`. `clear()` only drops runnables that haven't started,
+        so a *running* scan used to be waited out in full -- measured at 5.7s
+        for a 20-photo folder, and proportionally worse for a real one, with
+        the window unresponsive and unclosable throughout. The worker only
+        checks between photos, so this takes effect within one photo rather
+        than instantly.
+        """
         if self._worker is None:
             return
         self._cancel_requested = True
         self._worker.cancel()
+
+    def _on_cancel_clicked(self) -> None:
+        if self._worker is None:
+            return
+        self.cancel_search()
         self.cancel_button.setEnabled(False)  # takes effect after the in-flight photo finishes, not instantly
 
     def _progress_text(self, done: int) -> str:

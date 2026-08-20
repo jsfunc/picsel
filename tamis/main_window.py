@@ -853,6 +853,12 @@ class MainWindow(QMainWindow):
             # up, so the wait below is bounded by one photo's detection.
             self.face_ctl.cancel_detection_work()
             self.face_ctl.wait_for_detection_to_stop()
+            # A Search by Name scan runs on the shared pool and only checks
+            # for cancellation between photos, so without this the
+            # waitForDone() below sits through the rest of the whole folder --
+            # the window stays up, unresponsive, for as long as the scan had
+            # left to run.
+            self.search_panel.cancel_search()
             self.face_ctl.save_face_catalog()
             # face_ctl's saves run on their own background pool now (see
             # FaceRecognitionController._save_thread_pool) -- wait for it

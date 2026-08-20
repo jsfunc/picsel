@@ -734,3 +734,36 @@ def test_cancelling_detection_leaves_no_worker_stranded_in_the_pending_list(main
         time.sleep(0.01)
 
     assert ctl._pending_face_workers == []
+
+
+def test_closing_during_a_folder_search_does_not_wait_out_the_scan(main_window, tmp_path, qapp):
+    """The scan runs on the shared pool and closeEvent blocks on
+    waitForDone(); clear() only drops runnables that haven't started, so a
+    running scan was waited out in full -- 5.7s for a 20-photo folder, and
+    proportionally worse for a real one, with the window unresponsive
+    throughout. Close now cancels it first, bounding the wait to one photo.
+    """
+    import numpy as np
+
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=6)
+    main_window.open_folder(photos)
+
+    gallery = main_window.face_ctl.person_gallery
+    person = gallery.add_person("Target")
+    gallery.add_embedding(person.id, np.random.default_rng(0).normal(size=512).astype(np.float32))
+    panel = main_window.search_panel
+    panel.refresh_people()
+    panel.name_combo.setCurrentText("Target")
+    panel._on_search_clicked()
+    worker = panel._worker
+    assert worker is not None, "expected a running search"
+
+    main_window.close()
+
+    assert worker.cancelled
+
+
+def test_cancel_search_is_a_no_op_with_no_search_running(main_window):
+    main_window.search_panel.cancel_search()  # must not raise

@@ -131,6 +131,10 @@ class FolderSearchWorker(QRunnable):
         currently on -- thread-safe, callable from the UI thread at any time."""
         self._cancelled.set()
 
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
     def run(self) -> None:
         failed: list[Path] = []
         try:
