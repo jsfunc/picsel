@@ -255,6 +255,9 @@
   <p>
     picSel uses the <code>facenet-pytorch</code> build of this network, pretrained on <strong>VGGFace2</strong> — a public dataset of about 3.3 million face photos across roughly 9,000 identities, deliberately varied in pose, age, and lighting so the resulting embedding space generalizes to faces it has never seen. picSel never trains this network itself; it's used exactly as published (transfer learning, not fine-tuning — see <a href="#future">What's not built yet</a>).
   </p>
+  <p>
+    VGGFace2 was released by its University of Oxford authors under a non-commercial research-use license — worth knowing since picSel itself is GPLv3 and general-purpose, not research-scoped. This is a documentation note, not legal advice; consult the dataset's own terms if this matters for how you use picSel.
+  </p>
 </div>
 <p>
   In <code class="file-path">picsel/recognition/embedder.py</code>, each detected face is cropped (with a small margin) and normalized using <code>facenet-pytorch</code>'s own <code>extract_face</code>/<code>fixed_image_standardization</code> helpers — reused rather than reimplemented, since getting the exact preprocessing a pretrained model expects right by hand is an easy way to silently degrade its accuracy. The output is one 512-float vector per face, computed once per face and cached (see <a href="#storage">Where everything is stored</a>) rather than recomputed every time a photo is viewed.
