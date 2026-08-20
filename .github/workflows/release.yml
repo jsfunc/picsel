@@ -61,6 +61,25 @@ jobs:
           chmod +x dist/picSel
           ditto -c -k dist/picSel ${{ matrix.asset_name }}
 
+      - name: Check the packaged asset size stays reasonable
+        shell: bash
+        run: |
+          size_bytes=$(stat -c%s "${{ matrix.asset_name }}" 2>/dev/null || stat -f%z "${{ matrix.asset_name }}")
+          size_mb=$((size_bytes / 1024 / 1024))
+          echo "Packaged asset size: ${size_mb}MB"
+          # The portable build deliberately excludes face recognition
+          # (requirements-dev.txt never installs torch/facenet-pytorch,
+          # ~2GB+ of mostly CUDA libraries) -- true today by omission, but
+          # previously unasserted. This budget sits well above a normal
+          # PySide6+Pillow build but far below what a torch-inclusive one
+          # would produce, so a future dependency change accidentally
+          # pulling recognition deps into the frozen build fails loudly
+          # here instead of silently shipping a multi-GB release asset.
+          if [ "$size_mb" -gt 500 ]; then
+            echo "ERROR: packaged asset is ${size_mb}MB, over the 500MB budget -- did a recognition dependency (torch/CUDA) get bundled?"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
