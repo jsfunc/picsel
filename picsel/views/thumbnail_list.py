@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, QSize, Qt, QThreadPool
-from PySide6.QtGui import QColor, QFontMetrics, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QFontMetrics, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
 
 from picsel.models.image_item import ImageItem, Status
 from picsel.thumbnails import ThumbnailWorker
-
-SELECTED_BG = QColor(46, 125, 50, 120)
-REJECTED_BG = QColor(125, 46, 46, 120)
-NEUTRAL_BG = QColor(0, 0, 0, 0)
+from picsel.views.theme import (
+    BADGE_TEXT_COLOR,
+    NEUTRAL_TINT,
+    REJECTED_BADGE_COLOR,
+    REJECTED_TINT,
+    SELECTED_BADGE_COLOR,
+    SELECTED_TINT,
+)
 
 ICON_SIZE = QSize(120, 120)
 
@@ -30,13 +34,13 @@ def _badged_pixmap(pixmap: QPixmap, status: Status) -> QPixmap:
     doesn't depend on color to read."""
     if status is Status.UNRATED:
         return pixmap
-    color, glyph = (QColor(46, 140, 60), "✓") if status is Status.SELECTED else (QColor(170, 45, 45), "✕")
+    color, glyph = (SELECTED_BADGE_COLOR, "✓") if status is Status.SELECTED else (REJECTED_BADGE_COLOR, "✕")
 
     badged = QPixmap(pixmap)
     painter = QPainter(badged)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     circle = QRectF(3, 3, BADGE_DIAMETER, BADGE_DIAMETER)
-    painter.setPen(QColor("white"))
+    painter.setPen(BADGE_TEXT_COLOR)
     painter.setBrush(color)
     painter.drawEllipse(circle)
     font = painter.font()
@@ -130,11 +134,11 @@ class ThumbnailList(QListWidget):
                 label += "\n" + "★" * img_item.rating
             list_item.setText(label)
             if img_item.status is Status.SELECTED:
-                list_item.setBackground(SELECTED_BG)
+                list_item.setBackground(SELECTED_TINT)
             elif img_item.status is Status.REJECTED:
-                list_item.setBackground(REJECTED_BG)
+                list_item.setBackground(REJECTED_TINT)
             else:
-                list_item.setBackground(NEUTRAL_BG)
+                list_item.setBackground(NEUTRAL_TINT)
             raw_pixmap = list_item.data(_RAW_PIXMAP_ROLE)
             if raw_pixmap is not None:
                 list_item.setIcon(QIcon(_badged_pixmap(raw_pixmap, img_item.status)))

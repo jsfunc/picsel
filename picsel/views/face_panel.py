@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from picsel.recognition.detector import DEFAULT_MIN_CONFIDENCE
+from picsel.views.theme import HIGH_SIMILARITY_COLOR, LOW_SIMILARITY_COLOR
 
 SLIDER_RANGE = (0, 100)  # maps to a 0.0 - 1.0 confidence factor
 THUMBNAIL_SIZE = 48
@@ -39,8 +40,8 @@ THUMBNAIL_SIZE = 48
 # docstring), so confidence is conveyed continuously by color instead of a
 # yes/no cutoff. Below _LOW, solid red; above _HIGH, solid green; linearly
 # blended in between.
-_LOW_SIMILARITY_COLOR = QColor(200, 70, 70)
-_HIGH_SIMILARITY_COLOR = QColor(60, 160, 90)
+_LOW_SIMILARITY_COLOR = LOW_SIMILARITY_COLOR
+_HIGH_SIMILARITY_COLOR = HIGH_SIMILARITY_COLOR
 _LOW_SIMILARITY = 0.3
 _HIGH_SIMILARITY = 0.7
 

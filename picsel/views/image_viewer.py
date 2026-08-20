@@ -11,6 +11,14 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
+from picsel.views.theme import (
+    CROP_SELECTION_COLOR,
+    FACE_BOX_COLOR,
+    FACE_BOX_FILL,
+    FACE_DRAW_IN_PROGRESS_COLOR,
+    VIEWER_BACKGROUND,
+)
+
 
 class _RubberBandDrawer:
     """Shared "drag out a rectangle" state machine behind crop-selection and
@@ -24,7 +32,7 @@ class _RubberBandDrawer:
     clears itself right away.
     """
 
-    def __init__(self, scene: QGraphicsScene, pixmap_item: QGraphicsPixmapItem, pen_color: str, clear_after_release: bool) -> None:
+    def __init__(self, scene: QGraphicsScene, pixmap_item: QGraphicsPixmapItem, pen_color: QColor, clear_after_release: bool) -> None:
         self._scene = scene
         self._pixmap_item = pixmap_item
         self._pen_color = pen_color
@@ -42,7 +50,7 @@ class _RubberBandDrawer:
         self.clear()
         self._origin = scene_pos
         self.item = QGraphicsRectItem(QRectF(scene_pos, scene_pos))
-        pen = QPen(QColor(self._pen_color))
+        pen = QPen(self._pen_color)
         pen.setWidth(2)
         pen.setCosmetic(True)
         self.item.setPen(pen)
@@ -94,17 +102,21 @@ class ImageViewer(QGraphicsView):
         self._user_zoomed = False
 
         self._crop_mode = False
-        self._crop_drawer = _RubberBandDrawer(self._scene, self._pixmap_item, "yellow", clear_after_release=False)
+        self._crop_drawer = _RubberBandDrawer(
+            self._scene, self._pixmap_item, CROP_SELECTION_COLOR, clear_after_release=False
+        )
 
         self._face_edit_mode = False
         self._face_box_items: list[QGraphicsRectItem] = []
-        self._face_drawer = _RubberBandDrawer(self._scene, self._pixmap_item, "cyan", clear_after_release=True)
+        self._face_drawer = _RubberBandDrawer(
+            self._scene, self._pixmap_item, FACE_DRAW_IN_PROGRESS_COLOR, clear_after_release=True
+        )
 
         self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
-        self.setBackgroundBrush(QColor("#202020"))
+        self.setBackgroundBrush(VIEWER_BACKGROUND)
 
     def set_image(self, image: QImage | QPixmap) -> None:
         pixmap = QPixmap.fromImage(image) if isinstance(image, QImage) else image
@@ -157,13 +169,13 @@ class ImageViewer(QGraphicsView):
             self._scene.removeItem(item)
         self._face_box_items = []
 
-        pen = QPen(QColor("yellow"))
+        pen = QPen(FACE_BOX_COLOR)
         pen.setWidth(2)
         pen.setCosmetic(True)
         # A visible (if faint) fill, not just an outline: QGraphicsRectItem's
         # hit-testing only covers the stroke unless there's a brush, so an
         # unfilled box would only respond to clicks on its exact border.
-        brush = QColor(255, 220, 0, 40)
+        brush = FACE_BOX_FILL
         for left, top, right, bottom in boxes:
             rect_item = QGraphicsRectItem(QRectF(left, top, right - left, bottom - top))
             rect_item.setPen(pen)
