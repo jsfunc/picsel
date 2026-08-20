@@ -23,15 +23,39 @@ class FaceDetectionSignals(QObject):
 
 
 class FaceDetectionWorker(QRunnable):
-    """Runs `catalog.faces_for(path)` (detection+embedding, or a cache hit) off the UI thread."""
+    """Runs `catalog.faces_for(path)` (detection+embedding, or a cache hit) off the UI thread.
+
+    Cancellable, because these are queued faster than they can run: detection
+    costs a few hundred ms per uncached photo and is serialized by the model
+    lock, so a folder switch or a quit can find a substantial queue still
+    waiting. `cancel()` is checked once at the start of `run()`, which is
+    enough to make a queued-but-unstarted worker exit immediately -- a worker
+    already past that point is left to finish, since it is a few hundred ms
+    at most and its result still lands in the catalog's cache.
+    """
 
     def __init__(self, catalog: FaceCatalog, path: Path) -> None:
         super().__init__()
         self.catalog = catalog
         self.path = path
         self.signals = FaceDetectionSignals()
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        """Thread-safe, callable from the UI thread at any time."""
+        self._cancelled.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
 
     def run(self) -> None:
+        if self._cancelled.is_set():
+            # Still emit, so whoever is tracking pending workers can drop this
+            # one; the empty record list is ignored by the generation check on
+            # the receiving end.
+            self.signals.finished.emit(self.path, [], "")
+            return
         try:
             records: list[FaceRecord] = self.catalog.faces_for(self.path)
             error = ""

@@ -846,6 +846,13 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._save_library_state()
         if RECOGNITION_AVAILABLE:
+            # Abandon queued/running detection before anything blocks: a
+            # browse can leave a queue of speculative warming jobs behind, and
+            # waiting them out would hold the window open for seconds with no
+            # explanation. Cancelled workers exit as soon as they are picked
+            # up, so the wait below is bounded by one photo's detection.
+            self.face_ctl.cancel_detection_work()
+            self.face_ctl.wait_for_detection_to_stop()
             self.face_ctl.save_face_catalog()
             # face_ctl's saves run on their own background pool now (see
             # FaceRecognitionController._save_thread_pool) -- wait for it

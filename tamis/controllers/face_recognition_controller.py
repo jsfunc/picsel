@@ -12,6 +12,7 @@ live.
 
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QThreadPool, QTimer
@@ -24,6 +25,25 @@ from tamis.views.face_panel import THUMBNAIL_SIZE, FaceEntry
 from tamis.views.manage_people_dialog import ManagePeopleDialog
 
 IMAGE_LOAD_PRIORITY = 10  # matches main_window.IMAGE_LOAD_PRIORITY -- see there for why
+
+# Priorities within _detection_pool. The pool runs one job at a time, so these
+# strictly order its queue: the photo being looked at always jumps ahead of
+# any speculative warming still waiting.
+_CURRENT_PHOTO_PRIORITY = 10
+_WARM_PRIORITY = 0
+
+# How long navigation has to settle before detection is requested for the
+# photo landed on. Arrowing through photos faster than this enqueues no
+# foreground work at all -- the same debounce shape as _face_filter_timer
+# below and EditController._adjustment_timer.
+_DETECTION_DEBOUNCE_MS = 200
+
+# Upper bound on speculative warming jobs kept queued. Detection is a few
+# hundred ms each, so an unbounded queue would let a long browse commit the
+# GPU to minutes of work for photos the user has already left behind. The
+# most recently visited are kept (a deque drops from the opposite end), since
+# those are the ones nearest to where the user actually is.
+_MAX_WARM_QUEUE = 32
 
 
 class FaceRecognitionController:
@@ -58,7 +78,28 @@ class FaceRecognitionController:
         self._save_thread_pool.setMaxThreadCount(1)
         self._pending_save_workers: list[SaveWorker] = []
 
+        # Detection runs on its own single-threaded pool, not the shared one.
+        # Two reasons. It is single-threaded anyway (a shared nn.Module's
+        # forward pass is serialized by the model lock in detector.py), so
+        # extra threads buy nothing. And on the shared pool it actively
+        # starved the rest of the app: browsing past 24 photos queued 24
+        # workers, which occupied all 16 shared threads while blocked on that
+        # lock, so decode work for the photo actually on screen had no thread
+        # to run on -- measured at 152ms -> 2103ms for the displayed image.
+        # Thread-pool priority could not help, since it orders the queue but
+        # cannot preempt a running task.
+        self._detection_pool = QThreadPool()
+        self._detection_pool.setMaxThreadCount(1)
         self._pending_face_workers: list[FaceDetectionWorker] = []
+        # Photos navigated past whose faces aren't cached yet, queued behind
+        # the current photo to warm the cache. Bounded; see _MAX_WARM_QUEUE.
+        self._warm_queue: deque[Path] = deque(maxlen=_MAX_WARM_QUEUE)
+        self._queued_paths: set[Path] = set()  # in-flight/queued, to avoid detecting a photo twice
+        self._last_requested_path: Path | None = None
+        self._detection_timer = QTimer(parent_widget)
+        self._detection_timer.setSingleShot(True)
+        self._detection_timer.setInterval(_DETECTION_DEBOUNCE_MS)
+        self._detection_timer.timeout.connect(self._start_pending_detection)
         # The records for whichever photo is currently displayed, so the
         # threshold slider can re-filter/redraw instantly without ever
         # calling back into FaceCatalog (which would re-run detection
@@ -102,6 +143,11 @@ class FaceRecognitionController:
             self.save_face_catalog()
 
     def load_folder(self, folder: Path) -> None:
+        # Anything still queued belongs to the folder being left. Its results
+        # would be discarded anyway (faces_for's generation check refuses to
+        # cache them into the new folder), so running them would just occupy
+        # the GPU while the new folder's photos wait.
+        self.cancel_detection_work()
         self.face_catalog.load(folder)
         if self.face_catalog.load_error:
             QMessageBox.warning(self.parent_widget, "Face Data", self.face_catalog.load_error)
@@ -231,35 +277,94 @@ class FaceRecognitionController:
         if not self._active:
             return
         item = self.library.current_item
+        # Cleared immediately, not after the debounce: whatever is on screen
+        # belongs to the photo being navigated away from, and must not appear
+        # to describe the new one even briefly.
         self._current_face_path = None
         self._current_face_records = []
         self._current_visible_face_records = []
         self.viewer.set_face_boxes([])
         self.face_panel.set_faces([])
         if item is None:
+            self._detection_timer.stop()
             self.face_panel.set_status("No photo open.")
             return
 
+        # The photo just left, if it never got detected, becomes a candidate
+        # for speculative warming rather than being abandoned -- its result is
+        # cached per-photo, so the work stays useful if the user comes back.
+        if (
+            self._last_requested_path is not None
+            and self._last_requested_path != item.path
+            and self._last_requested_path not in self._queued_paths
+            and not self.face_catalog.is_cached(self._last_requested_path)
+        ):
+            self._warm_queue.append(self._last_requested_path)
+        self._last_requested_path = item.path
+
         self.face_panel.set_status(f"Detecting faces in {item.name}...")
-        worker = FaceDetectionWorker(self.face_catalog, item.path)
+        # Debounced: arrowing through photos faster than this enqueues no
+        # foreground detection for the ones passed through, which is what
+        # kept the photo finally landed on waiting behind every photo skimmed
+        # to reach it (measured at 3.3s for the 12th of 12).
+        self._detection_timer.start()
+
+    def _start_pending_detection(self) -> None:
+        """Fire the debounced request: the current photo first, then whatever
+        speculative warming has accumulated behind it."""
+        item = self.library.current_item
+        if item is None or not self._active:
+            return
+        self._start_detection(item.path, _CURRENT_PHOTO_PRIORITY)
+        while self._warm_queue:
+            self._start_detection(self._warm_queue.popleft(), _WARM_PRIORITY)
+
+    def _start_detection(self, path: Path, priority: int) -> None:
+        if path in self._queued_paths:
+            return  # already queued or running; detecting it twice caches the same result twice
+        self._queued_paths.add(path)
+        worker = FaceDetectionWorker(self.face_catalog, path)
         # Kept alive until it finishes, same reasoning as MainWindow's other
         # pending-worker lists: otherwise its signals QObject could be
         # garbage-collected mid-run.
         self._pending_face_workers.append(worker)
         worker.signals.finished.connect(
-            lambda path, records, error, w=worker: self._on_faces_detected(path, records, error, w)
+            lambda p, records, error, w=worker: self._on_faces_detected(p, records, error, w)
         )
-        # Same elevated priority as the visible full-image load -- this is
-        # just as much "what the user is looking at right now" as the image
-        # itself, and without it, switching to the Face Recognition tab
-        # right after opening a large never-before-processed folder could
-        # queue behind thousands of pending thumbnail jobs before detection
-        # for the current photo even starts.
-        self.thread_pool.start(worker, IMAGE_LOAD_PRIORITY)
+        self._detection_pool.start(worker, priority)
+
+    def cancel_detection_work(self) -> None:
+        """Abandon everything queued or running, without waiting for it.
+
+        Queued workers exit at the top of run(); one already past that point
+        finishes, which is bounded by a single photo's detection. Used on a
+        folder switch (its results would be discarded anyway, and worse, could
+        be cached against the wrong folder) and on quit, so a browse that left
+        a warming queue behind can't hold the app open.
+
+        Deliberately does *not* call `_detection_pool.clear()`. Dropping a
+        queued runnable means it never runs, so it never emits `finished` and
+        never gets removed from `_pending_face_workers` -- it would sit there
+        for the life of the process, and it is exactly the reference that
+        keeps its signals object alive. Letting every worker run and exit
+        immediately costs microseconds each and keeps that bookkeeping honest.
+        """
+        for worker in self._pending_face_workers:
+            worker.cancel()
+        self._warm_queue.clear()
+        self._queued_paths.clear()
+        self._last_requested_path = None
+        self._detection_timer.stop()
+
+    def wait_for_detection_to_stop(self) -> None:
+        self._detection_pool.waitForDone()
 
     def _on_faces_detected(self, path: Path, records: list, error: str, worker) -> None:
         if worker in self._pending_face_workers:
             self._pending_face_workers.remove(worker)
+        self._queued_paths.discard(path)
+        if worker.cancelled:
+            return  # abandoned by a folder switch or a quit; `records` is empty
         item = self.library.current_item
         if item is None or path != item.path:
             return  # user has navigated to a different photo since this was requested

@@ -194,6 +194,12 @@ class FaceCatalog:
             self._records[name] = records
         return self._records[name]
 
+    def is_cached(self, path: Path) -> bool:
+        """Whether `faces_for(path)` would return immediately rather than
+        running detection. Lets a caller skip queueing speculative work for a
+        photo that needs none."""
+        return path.name in self._records
+
     def invalidate(self, path: Path) -> None:
         """Drop `path`'s cached detection/embedding/label data, if any -- used
         after overwriting the file with an edited (rotated/flipped/cropped)

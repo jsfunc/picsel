@@ -1,5 +1,6 @@
 import json
 import time
+from collections import deque
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,12 @@ def _drain_background_workers(main_window, qapp, timeout: float = 20.0) -> None:
     # seconds) -- poll with a plain sleep + processEvents instead.
     deadline = time.time() + timeout
     while (
-        main_window._pending_image_workers or main_window.face_ctl._pending_face_workers
+        main_window._pending_image_workers
+        or main_window.face_ctl._pending_face_workers
+        # Detection is debounced, so it may not have been enqueued yet -- a
+        # drain that ignored the pending timer would return before any
+        # FaceDetectionWorker existed to wait for.
+        or main_window.face_ctl._detection_timer.isActive()
     ) and time.time() < deadline:
         time.sleep(0.05)
         qapp.processEvents()
@@ -361,24 +367,26 @@ def test_apply_culling_move_invalidates_cached_face_data_for_the_moved_photo(
     assert moved_name not in main_window.face_ctl.face_catalog._records
 
 
-def test_face_detection_gets_the_same_elevated_priority_as_image_loads(main_window, tmp_path, qapp, monkeypatch):
-    # Regression test: the visible full-image load is deliberately given
-    # elevated thread-pool priority over background thumbnail decoding, so
-    # the photo you're looking at doesn't wait behind a large folder's
-    # thumbnail queue -- face detection didn't get the same treatment, so
-    # switching to the Face Recognition tab right after opening a large
-    # folder could queue detection for the current photo behind thousands
-    # of pending thumbnail jobs.
+def test_face_detection_never_runs_on_the_shared_thread_pool(main_window, tmp_path, qapp, monkeypatch):
+    # Detection used to run on the shared pool with elevated priority, so the
+    # visible photo wouldn't queue behind thumbnail work. Priority orders the
+    # queue but cannot preempt a running task, and detection blocks on the
+    # model lock while holding its thread -- so browsing past enough photos
+    # filled every shared thread with detection workers waiting on each other,
+    # and decode for the photo actually on screen had nowhere to run
+    # (measured: 152ms -> 2103ms). It now has a pool of its own, which is a
+    # stronger guarantee than any priority: it cannot occupy a shared thread
+    # at all.
     photos = tmp_path / "photos"
     photos.mkdir()
     _make_photos(photos)
     main_window.open_folder(photos)
 
-    calls = []
+    started_on_shared = []
     real_start = main_window._thread_pool.start
 
     def spying_start(worker, priority=0):
-        calls.append((worker, priority))
+        started_on_shared.append(worker)
         return real_start(worker, priority)
 
     monkeypatch.setattr(main_window._thread_pool, "start", spying_start)
@@ -386,9 +394,34 @@ def test_face_detection_gets_the_same_elevated_priority_as_image_loads(main_wind
     main_window.side_tabs.setCurrentWidget(main_window.face_panel)
     _drain_background_workers(main_window, qapp)
 
-    face_calls = [call for call in calls if isinstance(call[0], face_ctl_module.FaceDetectionWorker)]
-    assert face_calls, "no FaceDetectionWorker was started"
-    assert all(priority == mw_module.IMAGE_LOAD_PRIORITY for _, priority in face_calls)
+    assert not [w for w in started_on_shared if isinstance(w, face_ctl_module.FaceDetectionWorker)]
+    assert main_window.face_ctl._detection_pool.maxThreadCount() == 1
+
+
+def test_the_photo_being_viewed_outranks_speculative_warming(main_window, tmp_path, qapp, monkeypatch):
+    # The detection pool runs one job at a time, so priority strictly orders
+    # its queue: whatever the user is looking at must be ahead of every
+    # already-navigated-past photo queued behind it.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=4)
+    main_window.open_folder(photos)
+
+    started = []
+    monkeypatch.setattr(
+        main_window.face_ctl._detection_pool, "start", lambda w, p=0: started.append((w.path, p))
+    )
+    main_window.face_ctl._active = True
+    for _ in range(3):
+        main_window._go_next()
+    main_window.face_ctl._start_pending_detection()
+
+    assert started, "no detection was enqueued"
+    current = main_window.library.current_item.path
+    assert started[0][0] == current
+    assert started[0][1] == face_ctl_module._CURRENT_PHOTO_PRIORITY
+    assert all(priority == face_ctl_module._WARM_PRIORITY for _, priority in started[1:])
+    assert all(path != current for path, _ in started[1:])
 
 
 def test_bundled_resource_path_resolves_relative_to_the_repo_when_not_frozen():
@@ -552,3 +585,152 @@ def test_an_unreadable_gallery_does_not_wipe_a_folders_face_labels(main_window, 
     assert ctl.face_catalog._records["a.jpg"][0].person_id == person.id
     on_disk = json.loads((folder / FACES_FILENAME).read_text())
     assert on_disk["a.jpg"][0]["person_id"] == person.id
+
+
+def test_fast_navigation_enqueues_no_detection_for_photos_passed_through(main_window, tmp_path, monkeypatch):
+    # The core fix: arrowing enqueued one full detection per photo, all
+    # serialized by the model lock, so the photo finally landed on completed
+    # last -- 3.3s for the 12th of 12 on a fast GPU.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=6)
+    main_window.open_folder(photos)
+
+    started = []
+    monkeypatch.setattr(
+        main_window.face_ctl._detection_pool, "start", lambda w, p=0: started.append((w.path, p))
+    )
+    main_window.face_ctl._active = True
+    for _ in range(5):
+        main_window._go_next()  # faster than the debounce; nothing should start yet
+
+    assert started == []
+    assert main_window.face_ctl._detection_timer.isActive()
+
+
+def test_a_photo_navigated_past_is_queued_to_warm_the_cache(main_window, tmp_path, monkeypatch):
+    # Opportunistic: a skipped photo's detection result is cached per-photo,
+    # so the work stays useful if the user comes back to it. It just must not
+    # outrank the photo being looked at.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=3)
+    main_window.open_folder(photos)
+
+    monkeypatch.setattr(main_window.face_ctl._detection_pool, "start", lambda w, p=0: None)
+    ctl = main_window.face_ctl
+    ctl._active = True
+    first = main_window.library.items[0].path
+    ctl.request_detection()
+    main_window._go_next()
+    ctl.request_detection()
+
+    assert first in ctl._warm_queue
+
+
+def test_an_already_cached_photo_is_not_queued_for_warming(main_window, tmp_path, monkeypatch):
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=3)
+    main_window.open_folder(photos)
+
+    monkeypatch.setattr(main_window.face_ctl._detection_pool, "start", lambda w, p=0: None)
+    ctl = main_window.face_ctl
+    ctl._active = True
+    first = main_window.library.items[0].path
+    ctl.face_catalog._records[first.name] = []  # already detected
+    ctl.request_detection()
+    main_window._go_next()
+    ctl.request_detection()
+
+    assert first not in ctl._warm_queue
+
+
+def test_the_warm_queue_is_bounded(main_window, tmp_path, monkeypatch):
+    # An unbounded queue would let a long browse commit the GPU to minutes of
+    # work for photos the user has already left behind.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=3)
+    main_window.open_folder(photos)
+    monkeypatch.setattr(main_window.face_ctl._detection_pool, "start", lambda w, p=0: None)
+
+    ctl = main_window.face_ctl
+    for i in range(face_ctl_module._MAX_WARM_QUEUE * 3):
+        ctl._warm_queue.append(tmp_path / f"far{i}.jpg")
+
+    assert len(ctl._warm_queue) == face_ctl_module._MAX_WARM_QUEUE
+
+
+def test_switching_folders_abandons_queued_detection(main_window, tmp_path, monkeypatch):
+    # Results for the old folder are discarded anyway (faces_for refuses to
+    # cache across a folder switch), so running them would only occupy the GPU
+    # while the new folder's photos wait.
+    first = tmp_path / "first"
+    first.mkdir()
+    _make_photos(first, count=3)
+    second = tmp_path / "second"
+    second.mkdir()
+    _make_photos(second, count=1)
+    main_window.open_folder(first)
+
+    monkeypatch.setattr(main_window.face_ctl._detection_pool, "start", lambda w, p=0: None)
+    ctl = main_window.face_ctl
+    ctl._active = True
+    ctl.request_detection()
+    ctl._warm_queue.append(first / "img000.jpg")
+    ctl._start_pending_detection()
+    queued = list(ctl._pending_face_workers)
+    assert queued, "expected queued detection work"
+
+    main_window.open_folder(second)
+
+    assert all(w.cancelled for w in queued)
+    assert ctl._warm_queue == deque()
+    assert ctl._queued_paths == set()
+
+
+def test_a_cancelled_worker_does_not_run_detection(tmp_path):
+    from tamis.recognition.faces import FaceCatalog
+    from tamis.recognition.worker import FaceDetectionWorker
+
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=1)
+    catalog = FaceCatalog()
+    catalog.load(photos)
+
+    called = []
+    worker = FaceDetectionWorker(catalog, photos / "img000.jpg")
+    worker.catalog = type("Spy", (), {"faces_for": lambda self, p: called.append(p) or []})()
+    worker.cancel()
+    worker.run()
+
+    assert called == []
+
+
+def test_cancelling_detection_leaves_no_worker_stranded_in_the_pending_list(main_window, tmp_path, qapp):
+    # _pending_face_workers is what keeps each worker's signals object alive,
+    # so an entry that never completes is both a leak and a lie about what is
+    # still running. Dropping queued runnables from the pool would create
+    # exactly that, which is why cancellation lets them run and exit instead.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=4)
+    main_window.open_folder(photos)
+
+    ctl = main_window.face_ctl
+    ctl._active = True
+    ctl.request_detection()
+    ctl._warm_queue.extend(item.path for item in main_window.library.items)
+    ctl._start_pending_detection()
+    assert ctl._pending_face_workers
+
+    ctl.cancel_detection_work()
+    ctl.wait_for_detection_to_stop()
+    deadline = time.time() + 20
+    while ctl._pending_face_workers and time.time() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert ctl._pending_face_workers == []
