@@ -13,29 +13,37 @@ jobs:
         include:
           # "lean": no face recognition, smallest/fastest download.
           # "cpu": face recognition, CPU-only PyTorch build.
-          # "gpu": face recognition, CUDA-enabled PyTorch build (much larger,
-          # uses an NVIDIA GPU automatically if present at runtime).
-          # No macOS "gpu" leg -- Apple has no CUDA support at all, on Intel
-          # or Apple Silicon, so a GPU-accelerated build isn't possible there;
-          # macOS's "cpu" leg is the only face-recognition option on that OS.
+          #
+          # There is deliberately no "gpu" (CUDA) variant here. GPU users are
+          # served by installing from source instead (./install.sh already
+          # auto-detects nvidia-smi and pulls the CUDA wheels) -- see the
+          # README's "Standalone executables" section. Two independent reasons
+          # a packaged CUDA build doesn't work as a release asset:
+          #
+          #   1. Too big to publish. A real CUDA-enabled PyInstaller build on
+          #      Linux is ~2.6GB, and GitHub rejects any release asset over
+          #      2GiB. The v2.1.0 run hit exactly this: all eight build legs
+          #      succeeded, then the release job failed uploading that one
+          #      asset, leaving 2.1.0 published with the other seven.
+          #   2. Silently wrong on Windows. The CUDA wheels only live on
+          #      download.pytorch.org, not PyPI -- and PyPI's Windows torch
+          #      wheel is CPU-only. A plain `pip install torch` therefore
+          #      produced a *CPU* build labeled "-recognition-gpu" (v2.1.0's
+          #      two Windows recognition assets came out 535 bytes apart),
+          #      so anyone who chose it for GPU support got CPU inference
+          #      with no indication anything was wrong.
           - os: ubuntu-latest
             variant: lean
             asset_name: Tamis-linux-x86_64.tar.gz
           - os: ubuntu-latest
             variant: cpu
             asset_name: Tamis-linux-x86_64-recognition-cpu.tar.gz
-          - os: ubuntu-latest
-            variant: gpu
-            asset_name: Tamis-linux-x86_64-recognition-gpu.tar.gz
           - os: windows-latest
             variant: lean
             asset_name: Tamis-windows-x86_64.zip
           - os: windows-latest
             variant: cpu
             asset_name: Tamis-windows-x86_64-recognition-cpu.zip
-          - os: windows-latest
-            variant: gpu
-            asset_name: Tamis-windows-x86_64-recognition-gpu.zip
           - os: macos-latest
             variant: lean
             asset_name: Tamis-macos-arm64.zip
@@ -68,8 +76,6 @@ jobs:
           pip install -r requirements-dev.txt
           if [ "${{ matrix.variant }}" = "cpu" ]; then
             pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
-          elif [ "${{ matrix.variant }}" = "gpu" ]; then
-            pip install -r requirements-recognition.txt
           fi
 
       - name: Build executable
@@ -101,27 +107,24 @@ jobs:
           # Per-variant budget, so a future dependency change that bloats one
           # build fails loudly here instead of silently shipping an
           # oversized release asset.
-          #   lean: no face recognition at all -- well above a normal
-          #     PySide6+Pillow build, far below anything torch-inclusive
-          #     (catches face recognition accidentally leaking into this
-          #     variant, which is the whole point of it existing).
-          #   cpu: measured ~1.7GB of extra site-packages for
-          #     requirements-recognition.txt installed with the CPU-only
-          #     wheel index (see install.sh's sizing message) -- this budget
-          #     hasn't been checked against a real frozen build of this
-          #     variant yet, so it's an estimate scaled from the gpu number
-          #     below, not a direct measurement; tighten it once a real CI
-          #     run of this leg has produced a number to check against.
-          #   gpu: measured directly -- a real local PyInstaller build of
-          #     this exact spec, with the standard CUDA-enabled wheels
-          #     installed, produced a 2.6GB executable on Linux (verified to
-          #     actually launch and print `--version` correctly, i.e. the
-          #     whole torch/torchvision/facenet-pytorch import chain works
-          #     when frozen, not just that PyInstaller didn't error out).
+          #
+          # Both budgets are now derived from real published v2.1.0 assets
+          # (the previous numbers were estimates written before any CI run of
+          # these legs existed), taking the largest OS per variant and
+          # allowing roughly 2x headroom for normal dependency growth:
+          #   lean: linux 93MB, windows 61MB, macos 43MB  -> 200MB budget.
+          #     Also the check that catches face recognition accidentally
+          #     leaking into this variant, which is the whole point of it
+          #     existing -- anything torch-inclusive lands far above 200MB.
+          #   cpu:  linux 336MB, windows 235MB, macos 196MB -> 700MB budget.
+          #
+          # Keep every budget well under 2048 (GitHub rejects release assets
+          # over 2GiB). The old gpu budget was 3500MB, i.e. above a limit the
+          # upload could never satisfy, so a ~2.6GB asset passed this check
+          # and then failed to publish -- see the matrix comment above.
           case "${{ matrix.variant }}" in
-            lean) budget_mb=500 ;;
-            cpu)  budget_mb=1500 ;;
-            gpu)  budget_mb=3500 ;;
+            lean) budget_mb=200 ;;
+            cpu)  budget_mb=700 ;;
           esac
           if [ "$size_mb" -gt "$budget_mb" ]; then
             echo "ERROR: packaged asset is ${size_mb}MB, over the ${budget_mb}MB budget for the '${{ matrix.variant }}' variant."

@@ -2,9 +2,18 @@
 
 # Face recognition (optional): detection + embedding backbone.
 #
-# Default install (this file as-is) pulls the standard PyPI wheels, which
-# bundle CUDA support and will use an NVIDIA GPU automatically if present
-# (`torch.cuda.is_available()`), falling back to CPU otherwise.
+# Default install (this file as-is) pulls the standard PyPI wheels. On Linux
+# those bundle CUDA support and will use an NVIDIA GPU automatically if
+# present (`torch.cuda.is_available()`), falling back to CPU otherwise.
+#
+# NOT so on Windows: PyPI's Windows torch wheel is CPU-only, and the CUDA
+# builds are published exclusively on download.pytorch.org. Installing this
+# file as-is on Windows therefore yields CPU inference with no error and no
+# warning -- it just quietly runs slower. (This is what made release 2.1.0's
+# Windows "-recognition-gpu" asset byte-for-byte identical to its CPU one.)
+# For GPU support on Windows, pick the index matching your driver's CUDA
+# version from https://pytorch.org/get-started/locally/ , e.g.:
+#   pip install --extra-index-url https://download.pytorch.org/whl/cu121 -r requirements-recognition.txt
 #
 # On a machine with no NVIDIA GPU, installing this way still works but wastes
 # ~2GB downloading unused CUDA libraries. Avoid that with the CPU-only wheel

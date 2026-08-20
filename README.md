@@ -67,9 +67,22 @@ Recognition and Search by Name tabs simply absent. To add it later:
 
 ```bash
 source .venv/bin/activate
-pip install -r requirements-recognition.txt                                            # GPU-capable
+pip install -r requirements-recognition.txt                                            # GPU-capable (Linux)
 pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt  # CPU-only
 ```
+
+On **Windows**, the first command installs a CPU-only build — PyPI's Windows
+`torch` wheel has no CUDA support. Use PyTorch's own index instead, matching
+the CUDA version to your driver (see
+[pytorch.org/get-started](https://pytorch.org/get-started/locally/)):
+
+```powershell
+pip install --extra-index-url https://download.pytorch.org/whl/cu121 -r requirements-recognition.txt
+```
+
+Either way, `Help > About Tamis` reports whether recognition is enabled, and
+`python -c "import torch; print(torch.cuda.is_available())"` confirms whether
+it will actually use the GPU.
 
 ## Usage
 
@@ -108,33 +121,56 @@ GitHub Release. You can also run the workflow manually from the Actions tab.
 These are unsigned builds, so Windows SmartScreen and macOS Gatekeeper will
 warn on first run; you'll need to explicitly allow the app to run.
 
-Each OS gets up to three release assets, matching `install.sh`'s GPU/CPU/
-no-recognition choice:
+Each OS gets two release assets:
 
 | Asset suffix | Contents | Approx. size |
 | --- | --- | --- |
-| *(none)* | No face recognition | a few hundred MB |
-| `-recognition-cpu` | Face recognition, CPU-only | ~1.5GB |
-| `-recognition-gpu` | Face recognition, CUDA-enabled | ~2.6GB |
+| *(none)* | No face recognition | 43–93MB |
+| `-recognition-cpu` | Face recognition, CPU-only | 196–336MB |
 
-macOS has no `-recognition-gpu` asset — Apple dropped NVIDIA GPU support
-entirely, so a CUDA build isn't possible there; `-recognition-cpu` is the
-only face-recognition option on that platform.
+### Why there's no GPU download
 
-To build one locally instead:
+Packaged executables are CPU-only even where a CUDA build would be
+possible. **If you have an NVIDIA GPU and want to use it, install from
+source rather than downloading an executable** — `./install.sh` detects
+`nvidia-smi` and installs the CUDA-enabled wheels automatically (see
+[Installation](#installation) above). Nothing else needs configuring;
+`tamis/recognition/detector.py` picks the device at import time.
+
+Two reasons a prebuilt CUDA asset isn't offered:
+
+- **It's too large to publish.** A CUDA-enabled PyInstaller build is ~2.6GB
+  on Linux, and GitHub rejects release assets over 2GiB. Release 2.1.0 hit
+  exactly this: the build itself succeeded, but the upload failed, which is
+  why that release shipped without it.
+- **It would be wrong on Windows.** CUDA wheels are only published on
+  `download.pytorch.org`, not PyPI, and PyPI's Windows `torch` wheel is
+  CPU-only — so a Windows asset labelled "GPU" would quietly contain CPU
+  inference. (Release 2.1.0's Windows `-recognition-gpu` asset was exactly
+  this: byte-for-byte the CPU build. Don't use it; take
+  `-recognition-cpu`, or install from source.)
+
+To build an executable locally:
 
 ```bash
 source .venv/bin/activate
 pip install -r requirements-dev.txt
 # Optional, for a face-recognition-capable build -- otherwise the same lean
 # build install.sh produces without recognition:
-pip install -r requirements-recognition.txt                                            # GPU-capable
+pip install -r requirements-recognition.txt                                            # GPU-capable (Linux)
 pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt  # CPU-only
 pyinstaller tamis.spec
 ```
 
 The executable is written to `dist/Tamis` (`dist/Tamis.exe` on Windows).
 PyInstaller doesn't cross-compile, so this must be run on each target OS.
+
+A CUDA-enabled build works locally and is the supported way to get a
+GPU-capable executable — it just can't be published as a release asset (see
+above). Expect ~2.6GB, and note that bundling CUDA runtime libraries into a
+one-file executable is sensitive to the driver on the machine that runs it,
+which is another reason installing from source is the smoother path for GPU
+users.
 
 ## License
 
