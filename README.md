@@ -45,7 +45,7 @@ Requires Python 3.9+.
 ```
 
 This checks your Python version, creates a `.venv` virtual environment, and
-installs the dependencies (`PySide6`, `Pillow`, `pillow-heif`, `pytest`).
+installs the dependencies (`PySide6`, `Pillow`, `pillow-heif`).
 
 ### Face recognition (optional)
 
@@ -82,8 +82,12 @@ See Help > Keyboard Shortcuts inside the app for the full shortcut list
 
 ## Running tests
 
+`pytest` is a dev-only dependency (not installed by `./install.sh`, so a
+plain end-user install doesn't pull in a test runner):
+
 ```bash
 source .venv/bin/activate
+pip install -r requirements-dev.txt
 python -m pytest
 ```
 

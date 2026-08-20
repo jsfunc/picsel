@@ -13,5 +13,4 @@ PySide6>=6.6,<7
 # See editing/operations.py's EditSession.save() for the full explanation.
 Pillow>=11.1,<12
 pillow-heif>=0.15,<1
-pytest>=8.0,<9
 
