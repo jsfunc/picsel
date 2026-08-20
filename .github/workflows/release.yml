@@ -143,6 +143,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4  # for CHANGELOG.md, read by the step below
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -152,8 +154,32 @@ jobs:
           mkdir -p release
           find artifacts -type f -exec mv {} release/ \;
 
+      # generate_release_notes alone produces a bare list of commit subjects,
+      # which buries anything a user needs to know *before* upgrading (in
+      # 2.2.0: a one-way sidecar format change, and the removal of the
+      # -recognition-gpu assets). The changelog already says all of that in
+      # prose, so use this tag's section as the release body and let the
+      # generated commit list append below it.
+      - name: Use this version's changelog section as the release body
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v want="## [$version]" '
+            index($0, want) == 1 { found = 1; next }
+            found && /^## \[/    { exit }
+            found                { print }
+          ' CHANGELOG.md > release-body.md
+          # Fail loudly rather than publishing a release with an empty body:
+          # it means the changelog was not updated for this tag.
+          if [ ! -s release-body.md ]; then
+            echo "ERROR: CHANGELOG.md has no '## [$version]' section for tag ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+          echo "--- release body ---"
+          cat release-body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: release/*
+          body_path: release-body.md
           generate_release_notes: true
