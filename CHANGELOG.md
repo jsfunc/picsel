@@ -6,6 +6,8 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+## [2.4.0]
+
 ### Added
 
 - **A sharpness score beside the quality score**, shown under each thumbnail
