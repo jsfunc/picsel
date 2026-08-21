@@ -249,7 +249,9 @@ class MainWindow(QMainWindow):
             self.sort_by_score_button = QToolButton()
             self.sort_by_score_button.setText("\u2193")  # descending
             self.sort_by_score_button.setCheckable(True)
-            self.sort_by_score_button.setToolTip("Rank photos by quality score, highest first")
+            self.sort_by_score_button.setToolTip(
+                "Rank photos by quality score, highest first.\nClick again for filename order."
+            )
             self.sort_by_score_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.sort_by_score_button.clicked.connect(self._on_sort_by_score_clicked)
 
@@ -268,15 +270,16 @@ class MainWindow(QMainWindow):
         return row
 
     def _on_sort_by_score_clicked(self) -> None:
-        """Clicking always selects score order rather than toggling it off.
+        """Toggle between score order and the default alphabetical order.
 
-        The button is checkable only to show which ordering is active; there
-        is no "unsorted" state to return to, so a second click would have to
-        invent one. Use the View menu to pick a different order, which
-        unchecks this.
+        Clicking again returns to filename order rather than to whichever
+        order happened to be active before. That keeps the button a genuine
+        two-state toggle whose checked state always means "sorted by score";
+        restoring an arbitrary previous mode would leave the unchecked state
+        meaning several different things. A different order is still one click
+        away in the View menu, which unchecks this.
         """
-        self.sort_by_score_button.setChecked(True)
-        self._set_sort_mode("score")
+        self._set_sort_mode("name" if self._sort_mode == "score" else "score")
 
     def _update_score_filter_tooltip(self, value: int) -> None:
         self.score_filter.setToolTip(

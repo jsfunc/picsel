@@ -8,8 +8,9 @@ work landed, not necessarily when a version was tagged.
 
 ### Added
 
-- **Rank photos by quality score**, highest first — a button above the filter
-  slider beside the filmstrip, and a matching `View > Sort by Quality Score`.
+- **Rank photos by quality score**, highest first — a toggle button above
+  the filter slider beside the filmstrip, and a matching
+  `View > Sort by Quality Score`. Clicking again returns to filename order.
   Photos not yet scored sort last rather than as zero, since scoring runs in
   the background and "not scored yet" is not "scored badly". The order
   settles once when a scoring pass finishes rather than reshuffling every

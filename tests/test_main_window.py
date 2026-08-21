@@ -929,19 +929,39 @@ def test_the_sort_button_and_the_view_menu_stay_in_sync(main_window, tmp_path):
     assert not main_window.sort_by_score_button.isChecked()
 
 
-def test_clicking_the_sort_button_again_keeps_score_order(main_window, tmp_path):
-    # It is checkable to show which ordering is active, not to toggle back to
-    # some "unsorted" state that does not exist.
+def test_the_sort_button_toggles_back_to_alphabetical_order(main_window, tmp_path):
     photos = tmp_path / "photos"
     photos.mkdir()
-    _make_photos(photos, count=2)
+    _make_photos(photos, count=4)
     main_window.open_folder(photos)
+    _seed_scores(main_window, {0: 30, 1: 90, 2: 10, 3: 60})
 
     main_window.sort_by_score_button.click()
-    main_window.sort_by_score_button.click()
-
     assert main_window._sort_mode == "score"
     assert main_window.sort_by_score_button.isChecked()
+
+    main_window.sort_by_score_button.click()
+    assert main_window._sort_mode == "name"
+    assert not main_window.sort_by_score_button.isChecked()
+    names = [item.name for item in main_window.library.items]
+    assert names == sorted(names)
+
+
+def test_toggling_off_returns_to_names_even_from_another_order(main_window, tmp_path):
+    # The unchecked state means one thing -- filename order -- rather than
+    # restoring whichever order preceded the click.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=3)
+    main_window.open_folder(photos)
+    _seed_scores(main_window, {0: 30, 1: 90, 2: 10})
+    main_window._set_sort_mode("stars")
+
+    main_window.sort_by_score_button.click()
+    main_window.sort_by_score_button.click()
+
+    assert main_window._sort_mode == "name"
+    assert main_window.sort_by_name_action.isChecked()
 
 
 def test_the_quality_controls_are_one_thumbnail_tall(main_window):
