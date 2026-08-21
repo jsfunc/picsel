@@ -34,6 +34,9 @@ jobs:
           # PyPI, not on download.pytorch.org's index -- see the comment in
           # requirements-recognition.txt.
           pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
+          # The quality extra too, or its tests silently skip and the feature
+          # goes untested -- which is how a release shipped without it.
+          pip install -r requirements-quality.txt
 
       - name: Run tests
         env:

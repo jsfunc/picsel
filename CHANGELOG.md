@@ -6,6 +6,18 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The downloadable builds had no quality scoring.** The release workflow
+  installed the recognition extra but never the quality one, so `open_clip`
+  was absent from the packaged executable and the feature switched itself
+  off exactly as designed — no scores, no filter slider, no ranking button.
+  It now ships in the `-recognition-cpu` assets, which grow by about 17MB.
+- **CI had been failing since 2.3.0.** The test workflow did not install the
+  quality extra either, so the twelve tests covering the feature failed
+  instead of being skipped. They are now marked to skip when the extra is
+  absent, and the workflow installs it so they actually run.
+
 ## [2.3.1]
 
 ### Added

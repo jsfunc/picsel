@@ -76,6 +76,11 @@ jobs:
           pip install -r requirements-dev.txt
           if [ "${{ matrix.variant }}" = "cpu" ]; then
             pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-recognition.txt
+            # Quality scoring rides along with recognition rather than being a
+            # variant of its own: it needs torch, which this variant already
+            # has, so it costs only open_clip and timm in the bundle. Its
+            # ~1.7GB of CLIP weights download on first use, not at build time.
+            pip install -r requirements-quality.txt
           fi
 
       - name: Build executable

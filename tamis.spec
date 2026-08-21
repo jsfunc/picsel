@@ -52,6 +52,27 @@ if RECOGNITION_AVAILABLE:
         binaries += pkg_binaries
         hiddenimports += pkg_hiddenimports
 
+# Aesthetic quality scoring (optional, see requirements-quality.txt). Guarded
+# the same way, and separately from the block above: it is a different extra,
+# so a build environment can legitimately have one and not the other.
+# open_clip ships model configs as package data that static analysis cannot
+# see, and timm is reached only through open_clip's registry -- without
+# collect_all, the frozen build imports open_clip and then fails to find the
+# model it was asked for.
+try:
+    import open_clip  # noqa: F401
+
+    QUALITY_AVAILABLE = True
+except ImportError:
+    QUALITY_AVAILABLE = False
+
+if QUALITY_AVAILABLE:
+    for pkg in ("open_clip", "timm"):
+        pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(pkg)
+        datas += pkg_datas
+        binaries += pkg_binaries
+        hiddenimports += pkg_hiddenimports
+
 a = Analysis(
     ["main.py"],
     pathex=[],

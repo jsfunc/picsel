@@ -12,6 +12,14 @@ from PySide6.QtWidgets import QDialog, QMessageBox  # noqa: E402
 
 import tamis.controllers.face_recognition_controller as face_ctl_module  # noqa: E402
 import tamis.main_window as mw_module  # noqa: E402
+
+# Quality scoring is a second optional extra on top of recognition
+# (requirements-quality.txt). Its tests reach for widgets MainWindow only
+# builds when open_clip is installed, so they skip rather than fail on an
+# install that deliberately does not have it.
+needs_quality = pytest.mark.skipif(
+    not mw_module.QUALITY_AVAILABLE, reason="requires the optional quality extra (open_clip)"
+)
 from tamis import __version__  # noqa: E402
 from tamis.models import Status  # noqa: E402
 
@@ -829,6 +837,7 @@ def _seed_scores(main_window, scores: dict) -> None:
     main_window.thumbnail_list.set_scores({items[i].path: s for i, s in scores.items()})
 
 
+@needs_quality
 def test_the_score_filter_hides_photos_without_touching_the_library(main_window, tmp_path):
     photos = tmp_path / "photos"
     photos.mkdir()
@@ -846,6 +855,7 @@ def test_the_score_filter_hides_photos_without_touching_the_library(main_window,
     assert not any(main_window.thumbnail_list.item(i).isHidden() for i in range(4))
 
 
+@needs_quality
 def test_navigation_skips_photos_the_filter_hides(main_window, tmp_path):
     # A photo you cannot see in the filmstrip should not be reachable by
     # arrowing past it either.
@@ -867,6 +877,7 @@ def test_navigation_skips_photos_the_filter_hides(main_window, tmp_path):
     assert main_window.library.current_index == 0
 
 
+@needs_quality
 def test_raising_the_filter_moves_off_a_now_hidden_photo(main_window, tmp_path):
     photos = tmp_path / "photos"
     photos.mkdir()
@@ -881,6 +892,7 @@ def test_raising_the_filter_moves_off_a_now_hidden_photo(main_window, tmp_path):
     assert not main_window.thumbnail_list.is_filtered_out(main_window.library.current_item)
 
 
+@needs_quality
 def test_a_filter_hiding_everything_leaves_the_current_photo_alone(main_window, tmp_path):
     # Better than jumping somewhere arbitrary or crashing on an empty result.
     photos = tmp_path / "photos"
@@ -896,6 +908,7 @@ def test_a_filter_hiding_everything_leaves_the_current_photo_alone(main_window, 
     assert main_window.library.current_index == 0
 
 
+@needs_quality
 def test_sorting_by_score_puts_the_best_first_and_the_unscored_last(main_window, tmp_path):
     # "Not scored yet" is not "scored badly": scoring runs in the background,
     # so an unscored photo must not be sunk as if it had scored zero.
@@ -912,6 +925,7 @@ def test_sorting_by_score_puts_the_best_first_and_the_unscored_last(main_window,
     assert scores[3] is None
 
 
+@needs_quality
 def test_the_sort_button_and_the_view_menu_stay_in_sync(main_window, tmp_path):
     # They are two faces of one choice, so picking either must update both.
     photos = tmp_path / "photos"
@@ -929,6 +943,7 @@ def test_the_sort_button_and_the_view_menu_stay_in_sync(main_window, tmp_path):
     assert not main_window.sort_by_score_button.isChecked()
 
 
+@needs_quality
 def test_the_sort_button_toggles_back_to_alphabetical_order(main_window, tmp_path):
     photos = tmp_path / "photos"
     photos.mkdir()
@@ -947,6 +962,7 @@ def test_the_sort_button_toggles_back_to_alphabetical_order(main_window, tmp_pat
     assert names == sorted(names)
 
 
+@needs_quality
 def test_toggling_off_returns_to_names_even_from_another_order(main_window, tmp_path):
     # The unchecked state means one thing -- filename order -- rather than
     # restoring whichever order preceded the click.
@@ -964,6 +980,7 @@ def test_toggling_off_returns_to_names_even_from_another_order(main_window, tmp_
     assert main_window.sort_by_name_action.isChecked()
 
 
+@needs_quality
 def test_the_quality_controls_are_one_thumbnail_tall(main_window):
     # The button and slider share the height of a single filmstrip cell, so
     # they line up with the strip they act on.
@@ -971,6 +988,7 @@ def test_the_quality_controls_are_one_thumbnail_tall(main_window):
     assert column.height() == main_window.thumbnail_list.gridSize().height()
 
 
+@needs_quality
 def test_the_status_bar_reports_the_score_and_the_active_filter(main_window, tmp_path):
     # The slider has no numeric label of its own, so this is where the cutoff
     # is visible while browsing.
@@ -988,6 +1006,7 @@ def test_the_status_bar_reports_the_score_and_the_active_filter(main_window, tmp
     assert "Showing score >= 50" in message and "1 hidden" in message
 
 
+@needs_quality
 def test_sorting_by_score_before_any_scores_exist_still_takes_effect(main_window, tmp_path):
     """Asking for score order on a folder that has not been scored yet used to
     look like it had done nothing.
@@ -1014,6 +1033,7 @@ def test_sorting_by_score_before_any_scores_exist_still_takes_effect(main_window
     assert scores == [90, 60, 30, 10]
 
 
+@needs_quality
 def test_choosing_score_order_while_scoring_says_why_nothing_moved(main_window, tmp_path):
     photos = tmp_path / "photos"
     photos.mkdir()

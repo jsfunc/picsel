@@ -116,12 +116,11 @@ def test_a_cancelled_batch_does_no_work():
 
 
 def test_scores_from_a_different_model_are_discarded(tmp_path):
-    """Mixing models would order photos by two different opinions at once.
+    """Mixing models would order photos by two opinions at once.
 
-    Not hypothetical: the first release of this feature paired open_clip's
-    "ViT-L-14" config with OpenAI weights, silently substituting standard GELU
-    for the QuickGELU those weights were trained with. Every score it wrote
-    came from a different model than the one now in use.
+    Scores are only ever compared against each other, so this has no symptom:
+    the ordering is simply wrong, with nothing to notice and nothing to debug
+    from. The guard is what makes changing the model a safe edit.
     """
     (tmp_path / QUALITY_FILENAME).write_text(
         json.dumps({"model": "some-older-scorer", "scores": {"a.jpg": 55}})
@@ -132,7 +131,8 @@ def test_scores_from_a_different_model_are_discarded(tmp_path):
 
 
 def test_a_sidecar_with_no_model_recorded_is_discarded(tmp_path):
-    # The very first format had no model field at all.
+    # An unlabelled file could have come from any scorer, so it is not
+    # trustworthy enough to rank against current scores.
     (tmp_path / QUALITY_FILENAME).write_text(json.dumps({"a.jpg": 55, "b.jpg": 70}))
     store = QualityStore()
     store.load(tmp_path)

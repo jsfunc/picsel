@@ -44,13 +44,12 @@ logger = logging.getLogger(__name__)
 #
 # The "-quickgelu" suffix is load-bearing, not decoration. OpenAI's CLIP was
 # trained with QuickGELU activations, while open_clip's bare "ViT-L-14" config
-# defaults to standard GELU -- so pairing that config with
-# pretrained="openai" loads the right weights into the wrong architecture.
-# open_clip warns and carries on, so it fails silently. The result is not
-# noise but a consistently different model: Spearman 0.93 against the correct
-# pairing over 80 photos, with 75% of scores shifted by more than 2 points out
-# of 100. Any change here must also bump store.MODEL_ID, or cached scores from
-# the old pairing will be mixed in with new ones.
+# defaults to standard GELU -- so pairing that config with pretrained="openai"
+# loads the right weights into the wrong architecture. open_clip warns and
+# carries on, so it fails silently and produces plausible scores from a
+# consistently different model: measured at Spearman 0.93 against the correct
+# pairing, with 75% of scores shifted by more than 2 points out of 100.
+# Any change here must also bump store.MODEL_ID.
 CLIP_MODEL = "ViT-L-14-quickgelu"
 CLIP_PRETRAINED = "openai"
 
