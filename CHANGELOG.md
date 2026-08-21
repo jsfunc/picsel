@@ -6,6 +6,8 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+## [2.3.1]
+
 ### Added
 
 - **Rank photos by quality score**, highest first — a toggle button above
