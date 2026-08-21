@@ -6,6 +6,16 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+## [2.3.2]
+
+### Added
+
+- `--version` now also reports which optional extras a build has, and the
+  About dialog lists both features rather than only face recognition. Both
+  features hide themselves when their dependencies are missing, so there was
+  previously no way to tell a correctly-lean build from a packaged one that
+  was meant to include them.
+
 ### Fixed
 
 - **The downloadable builds had no quality scoring.** The release workflow

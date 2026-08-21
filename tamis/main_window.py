@@ -491,15 +491,17 @@ class MainWindow(QMainWindow):
         self._open_docs("docs/architecture.html", "Architecture Docs")
 
     def _show_about(self) -> None:
-        recognition_line = (
-            "Face recognition: enabled" if RECOGNITION_AVAILABLE else "Face recognition: not installed"
+        features = "<br>".join(
+            f"{'Face recognition' if i == 0 else 'Quality scoring'}: "
+            f"{'enabled' if available else 'not installed'}"
+            for i, available in enumerate((RECOGNITION_AVAILABLE, QUALITY_AVAILABLE))
         )
         QMessageBox.about(
             self,
             "About Tamis",
             f"<b>Tamis</b> {__version__}<br><br>"
             "A small desktop app for culling and lightly editing a folder of photos.<br><br>"
-            f"{recognition_line}<br><br>"
+            f"{features}<br><br>"
             'GPLv3 — <a href="https://github.com/jsfunc/tamis">github.com/jsfunc/tamis</a>',
         )
 
