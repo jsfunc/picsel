@@ -205,18 +205,31 @@ class ThumbnailList(QListWidget):
         # worker thread when it later tries to emit. Stale results are already
         # discarded by the generation check in _on_thumbnail_ready, which also
         # removes each worker from this list once it actually completes.
-        self.clear()
-        for item in items:
-            list_item = QListWidgetItem(item.name)
-            list_item.setData(Qt.ItemDataRole.UserRole, item)
-            list_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            score = self._scores.get(item.path)
-            if score is not None:
-                list_item.setData(_SCORE_ROLE, score)
-            self.addItem(list_item)
-            self._request_thumbnail(list_item, item, generation)
-        self.refresh_badges()
-        self._apply_filter()
+        # Signals stay blocked for the whole rebuild. clear() does not simply
+        # drop to "no current row": as rows are removed Qt walks the current
+        # row along, emitting currentRowChanged with intermediate *valid*
+        # indices. The owning window reads that signal as the user picking a
+        # photo, so an unblocked rebuild silently navigates the library --
+        # visible as the displayed photo changing on its own while the
+        # filmstrip is re-sorted underneath it. Hiding rows in _apply_filter
+        # moves the current row for the same reason, so it is covered too.
+        was_blocked = self.signalsBlocked()
+        self.blockSignals(True)
+        try:
+            self.clear()
+            for item in items:
+                list_item = QListWidgetItem(item.name)
+                list_item.setData(Qt.ItemDataRole.UserRole, item)
+                list_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                score = self._scores.get(item.path)
+                if score is not None:
+                    list_item.setData(_SCORE_ROLE, score)
+                self.addItem(list_item)
+                self._request_thumbnail(list_item, item, generation)
+            self.refresh_badges()
+            self._apply_filter()
+        finally:
+            self.blockSignals(was_blocked)
 
     def _request_thumbnail(self, list_item: QListWidgetItem, item: ImageItem, generation: int) -> None:
         cached = self._pixmap_cache.get(item.path)

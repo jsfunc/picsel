@@ -233,3 +233,37 @@ def test_the_delegate_reserves_room_for_three_text_lines(qapp):
     line = QFontMetrics(thumbnail_list.font()).height()
     assert hint.height() >= ICON_SIZE.height() + 3 * line
     assert hint == thumbnail_list.gridSize()  # delegate and grid must agree
+
+
+def test_rebuilding_the_list_does_not_look_like_the_user_picking_a_photo(qapp):
+    """clear() does not simply drop to "no current row".
+
+    As rows are removed Qt walks the current row along, emitting
+    currentRowChanged with intermediate *valid* indices. The owning window
+    reads that signal as a photo being selected, so an unblocked rebuild
+    silently navigates the library -- which showed up as the displayed photo
+    changing on its own while the filmstrip was re-sorted underneath it.
+    """
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(12)]
+    thumbnail_list.set_items(items)
+    thumbnail_list.setCurrentRow(7)
+
+    seen = []
+    thumbnail_list.currentRowChanged.connect(seen.append)
+    thumbnail_list.set_items(list(reversed(items)))
+
+    assert seen == [], f"rebuild emitted currentRowChanged{seen}"
+
+
+def test_signal_blocking_is_restored_after_a_rebuild(qapp):
+    # Blocking must not leak: a later genuine selection has to be heard.
+    thumbnail_list = ThumbnailList()
+    items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(4)]
+    thumbnail_list.set_items(items)
+    assert not thumbnail_list.signalsBlocked()
+
+    seen = []
+    thumbnail_list.currentRowChanged.connect(seen.append)
+    thumbnail_list.setCurrentRow(2)
+    assert seen == [2]

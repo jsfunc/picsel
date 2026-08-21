@@ -18,6 +18,15 @@ work landed, not necessarily when a version was tagged.
 
 ### Fixed
 
+- **Rebuilding the filmstrip could silently change which photo was
+  displayed.** `clear()` does not simply drop to "no current row": as rows
+  are removed Qt walks the current row along, emitting `currentRowChanged`
+  with intermediate *valid* indices, which the window read as the user
+  picking a photo. Every caller that rebuilt the strip happened to set the
+  current photo immediately afterwards, so it stayed hidden until scoring
+  began re-sorting the strip mid-browse — at which point the photo being
+  inspected would change on its own. The rebuild no longer emits selection
+  signals.
 - **Sorting by quality score appeared to do nothing on a folder that had not
   been scored yet.** With no scores, every photo falls into the "unscored"
   bucket, so score order is identical to filename order and nothing moves;
