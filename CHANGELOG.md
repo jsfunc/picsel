@@ -8,6 +8,16 @@ work landed, not necessarily when a version was tagged.
 
 ### Added
 
+- **A sharpness score beside the quality score**, shown under each thumbnail
+  in lighter type after the bold aesthetic score, and in the status bar.
+  Variance of the Laplacian mapped to 0-100, computed from the same decode
+  the aesthetic model already performs — about a millisecond per photo and no
+  extra file read, so scoring a 455-photo folder still takes ~34s. It answers
+  a question the aesthetic score cannot: on that folder the blurriest frames
+  score 3, 5 and 16 for sharpness while their aesthetic scores (23, 29, 32)
+  sit unremarkably mid-range. Cached scores from earlier versions are
+  recomputed automatically, since the model identity changed.
+
 - **Zoom now carries over to the next photo, and `Z` toggles 1:1.** Judging
   focus needs 1:1 — a 4000px photo fits the window at 18%, five image pixels
   per screen pixel, where a missed focus and a sharp shot look identical. But

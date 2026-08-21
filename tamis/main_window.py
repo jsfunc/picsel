@@ -716,9 +716,9 @@ class MainWindow(QMainWindow):
             f"  |  Selected: {counts['selected']}  Rejected: {counts['rejected']}  Unrated: {counts['unrated']}"
         )
         if QUALITY_AVAILABLE:
-            score = self.quality_ctl.score_for(item.path)
-            if score is not None:
-                message += f"  |  Quality: {score}"
+            scores = self.quality_ctl.score_for(item.path)
+            if scores is not None:
+                message += f"  |  Quality: {scores.quality}  Sharpness: {scores.blur}"
             # The slider has no numeric label of its own -- it and the sort
             # button share one thumbnail's height -- so the active cutoff is
             # reported here, where it stays visible while browsing.
@@ -763,10 +763,10 @@ class MainWindow(QMainWindow):
         reorder the folder again the moment its score arrived. The leading
         bucket keeps them apart; path breaks ties so the order is stable.
         """
-        score = self.quality_ctl.score_for(item.path) if QUALITY_AVAILABLE else None
-        if score is None:
+        scores = self.quality_ctl.score_for(item.path) if QUALITY_AVAILABLE else None
+        if scores is None:
             return (1, 0, item.path)
-        return (0, -score, item.path)
+        return (0, -scores.quality, item.path)
 
     def _set_sort_mode(self, mode: str) -> None:
         if mode == self._sort_mode:

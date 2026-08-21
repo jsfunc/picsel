@@ -86,9 +86,11 @@ it will actually use the GPU.
 
 ## Automatic quality scoring
 
-With the optional quality extra installed, every photo gets an **aesthetic
-score from 0 to 100**, shown in bold under its thumbnail, and a **vertical
-slider left of the filmstrip** hides anything below a chosen score. Nothing is
+With the optional quality extra installed, every photo gets two numbers under
+its thumbnail: an **aesthetic score from 0 to 100** in bold, and a
+**sharpness score** just after it in lighter type. A **vertical slider left of
+the filmstrip** hides anything below a chosen aesthetic score, and the button
+above it ranks photos by that score. Nothing is
 deleted — lowering the slider brings the photos straight back, and arrow-key
 navigation skips whatever is hidden so the strip and the viewer agree.
 
@@ -105,17 +107,24 @@ scoring head into `~/.tamis/`; everything runs locally after that.
 The score comes from CLIP image embeddings fed to the LAION aesthetic
 predictor. It was chosen over five alternatives measured on a 455-photo
 unculled folder: cheap technical metrics (Laplacian variance, TOPIQ, MUSIQ)
-detect black and blurred frames well but flatten out on photos that are simply
-fine, while this one keeps discriminating — roughly twice the spread over the
-technically-good photos, which is the half of the problem a blur detector
-cannot solve. NIMA scored marginally better and is cheaper, but the only
+detect blurred frames well but flatten out on photos that are simply fine,
+while this one keeps discriminating — roughly twice the spread over the
+technically-good photos. That is why both are shown: they answer different
+questions, and neither subsumes the other. NIMA scored marginally better and is cheaper, but the only
 readily available weights ship in a toolbox under a non-commercial licence
 that cannot be distributed with GPLv3 software; this model's parts are MIT and
 Apache-2.0.
 
-It is a good way to surface obvious rejects and to order a folder roughly. It
-is not a judgement of your taste — treat a low score as a suggestion to look,
-not a verdict.
+The sharpness score is the variance of the image Laplacian, computed from the
+same decode the aesthetic model uses, so it costs about a millisecond per
+photo and no extra file read. It measures how much fine detail is present,
+which is a good proxy for focus and a poor one for content: a sharp photo of a
+plain wall or an empty sky scores low, and a busy but slightly soft scene can
+outscore a clean, crisply-focused one.
+
+Both are good ways to surface obvious rejects and to order a folder roughly.
+Neither is a judgement of your taste — treat a low score as a suggestion to
+look, not a verdict.
 
 ## Usage
 
@@ -131,9 +140,9 @@ See Help > Keyboard Shortcuts inside the app for the full shortcut list
 ## Architecture
 
 [docs/architecture.html](docs/architecture.html) (also reachable from the
-app's `Help > Architecture Docs`) describes how the app is put together: the layers and the dependency rules between them, the threading
-model (three thread pools with different cancellation rules), the three
-sidecar formats, and the invariants that the non-obvious code exists to
+app's `Help > Architecture Docs`) describes how the app is put together: the
+layers and the dependency rules between them, the threading model (three
+thread pools with different cancellation rules), the sidecar formats, and the invariants that the non-obvious code exists to
 protect. Worth reading before adding a background task or a new persisted
 field — most of those rules are there because something broke once.
 

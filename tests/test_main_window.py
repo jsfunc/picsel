@@ -831,10 +831,16 @@ def _seed_scores(main_window, scores: dict) -> None:
     Fills both the store (which sorting reads) and the filmstrip (which
     filtering reads), so a test can just say what each photo scored.
     """
+    from tamis.quality.store import PhotoScores
+
+    # A bare int means the quality score; sharpness is what it is not about.
+    def as_scores(value):
+        return value if isinstance(value, PhotoScores) else PhotoScores(quality=value, blur=90)
+
     items = main_window.library.items
     store = main_window.quality_ctl.store
-    store.set_many({items[i].name: s for i, s in scores.items()}, store.generation)
-    main_window.thumbnail_list.set_scores({items[i].path: s for i, s in scores.items()})
+    store.set_many({items[i].name: as_scores(v) for i, v in scores.items()}, store.generation)
+    main_window.thumbnail_list.set_scores({items[i].path: as_scores(v) for i, v in scores.items()})
 
 
 @needs_quality
@@ -920,9 +926,9 @@ def test_sorting_by_score_puts_the_best_first_and_the_unscored_last(main_window,
 
     main_window._set_sort_mode("score")
 
-    scores = [main_window.quality_ctl.score_for(i.path) for i in main_window.library.items]
-    assert scores[:3] == [90, 60, 30]
-    assert scores[3] is None
+    scored = [main_window.quality_ctl.score_for(i.path) for i in main_window.library.items]
+    assert [s.quality for s in scored[:3]] == [90, 60, 30]
+    assert scored[3] is None
 
 
 @needs_quality
@@ -1029,8 +1035,8 @@ def test_sorting_by_score_before_any_scores_exist_still_takes_effect(main_window
     _seed_scores(main_window, {0: 30, 1: 90, 2: 10, 3: 60})
     main_window._on_scores_updated()
 
-    scores = [main_window.quality_ctl.score_for(i.path) for i in main_window.library.items]
-    assert scores == [90, 60, 30, 10]
+    scored = [main_window.quality_ctl.score_for(i.path) for i in main_window.library.items]
+    assert [s.quality for s in scored] == [90, 60, 30, 10]
 
 
 @needs_quality

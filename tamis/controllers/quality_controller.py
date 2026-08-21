@@ -133,7 +133,8 @@ class QualityController(QObject):
 
     # -- Score access ----------------------------------------------------
 
-    def score_for(self, path: Path) -> int | None:
+    def score_for(self, path: Path):
+        """Both scores for `path` as a PhotoScores, or None if not scored."""
         return self.store.get(path)
 
     def invalidate(self, path: Path) -> None:

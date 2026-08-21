@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSize, Qt, QThreadPool
-from PySide6.QtGui import QFontMetrics, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtCore import QRect, QRectF, QSize, Qt, QThreadPool
+from PySide6.QtGui import QFont, QFontMetrics, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QListWidget,
@@ -33,8 +33,8 @@ _RAW_PIXMAP_ROLE = Qt.ItemDataRole.UserRole + 1
 
 BADGE_DIAMETER = 22
 
-# The aesthetic score (0-100), stored per item so the delegate can draw it
-# without reaching back into a controller during paint.
+# (quality, blur) as a PhotoScores, stored per item so the delegate can draw
+# them without reaching back into a controller during paint.
 _SCORE_ROLE = Qt.ItemDataRole.UserRole + 2
 
 
@@ -133,15 +133,38 @@ class _ThumbnailDelegate(QStyledItemDelegate):
         if item is not None and item.rating:
             painter.drawText(stars_rect, Qt.AlignmentFlag.AlignCenter, "\u2605" * item.rating)
 
-        score = index.data(_SCORE_ROLE)
-        if score is not None:
-            score_rect = stars_rect.translated(0, line)
-            font = painter.font()
-            font.setBold(True)
-            painter.setFont(font)
-            painter.drawText(score_rect, Qt.AlignmentFlag.AlignCenter, str(int(score)))
+        scores = index.data(_SCORE_ROLE)
+        if scores is not None:
+            self._draw_scores(painter, stars_rect.translated(0, line), option.font, scores)
 
         painter.restore()
+
+    @staticmethod
+    def _draw_scores(painter, rect, base_font, scores) -> None:
+        """Quality in bold, sharpness just after it in regular weight.
+
+        Two weights rather than a separator, because the pair is read at a
+        glance across a whole strip: the bold number is the one being ranked
+        and filtered on, and the lighter one qualifies it.
+        """
+        bold = QFont(base_font)
+        bold.setBold(True)
+        quality, blur = str(scores.quality), str(scores.blur)
+        gap = QFontMetrics(base_font).horizontalAdvance("  ")
+        quality_width = QFontMetrics(bold).horizontalAdvance(quality)
+        blur_width = QFontMetrics(base_font).horizontalAdvance(blur)
+
+        x = rect.center().x() - (quality_width + gap + blur_width) // 2
+        painter.setFont(bold)
+        painter.drawText(
+            QRect(x, rect.y(), quality_width, rect.height()), Qt.AlignmentFlag.AlignCenter, quality
+        )
+        painter.setFont(base_font)
+        painter.drawText(
+            QRect(x + quality_width + gap, rect.y(), blur_width, rect.height()),
+            Qt.AlignmentFlag.AlignCenter,
+            blur,
+        )
 
 
 class ThumbnailList(QListWidget):
@@ -183,7 +206,7 @@ class ThumbnailList(QListWidget):
         # Aesthetic scores by path, and the slider's current cutoff. Filtering
         # only hides rows -- nothing is removed from the library, so a photo
         # below the cutoff is still there when the slider comes back down.
-        self._scores: dict[Path, int] = {}
+        self._scores: dict[Path, object] = {}  # path -> PhotoScores
         self._min_score = 0
 
     def set_items(self, items: list[ImageItem]) -> None:
@@ -317,8 +340,8 @@ class ThumbnailList(QListWidget):
         vanish as results trickle in would be worse than showing them."""
         if self._min_score <= 0:
             return False
-        score = self._scores.get(item.path)
-        return score is not None and score < self._min_score
+        scores = self._scores.get(item.path)
+        return scores is not None and scores.quality < self._min_score
 
     def _apply_filter(self) -> None:
         for i in range(self.count()):

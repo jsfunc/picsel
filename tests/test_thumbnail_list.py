@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor, QPixmap
 
 import tamis.views.thumbnail_list as thumbnail_list_module
 from tamis.models.image_item import ImageItem, Status
+from tamis.quality.store import PhotoScores
 from tamis.views.thumbnail_list import ICON_SIZE, _RAW_PIXMAP_ROLE, ThumbnailList, _badged_pixmap
 
 
@@ -172,18 +173,18 @@ def test_scores_are_stored_and_shown_per_item(qapp):
     items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(3)]
     thumbnail_list.set_items(items)
 
-    thumbnail_list.set_scores({items[0].path: 80, items[2].path: 20})
+    thumbnail_list.set_scores({items[0].path: PhotoScores(quality=80, blur=90), items[2].path: PhotoScores(quality=20, blur=90)})
 
-    assert thumbnail_list.score_for(items[0]) == 80
+    assert thumbnail_list.score_for(items[0]).quality == 80
     assert thumbnail_list.score_for(items[1]) is None
-    assert thumbnail_list.item(0).data(thumbnail_list_module._SCORE_ROLE) == 80
+    assert thumbnail_list.item(0).data(thumbnail_list_module._SCORE_ROLE).quality == 80
 
 
 def test_the_filter_hides_low_scoring_photos_without_removing_them(qapp):
     thumbnail_list = ThumbnailList()
     items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(3)]
     thumbnail_list.set_items(items)
-    thumbnail_list.set_scores({items[0].path: 80, items[1].path: 30, items[2].path: 55})
+    thumbnail_list.set_scores({items[0].path: PhotoScores(quality=80, blur=90), items[1].path: PhotoScores(quality=30, blur=90), items[2].path: PhotoScores(quality=55, blur=90)})
 
     thumbnail_list.set_min_score(50)
 
@@ -210,12 +211,12 @@ def test_scores_survive_a_re_sort(qapp):
     thumbnail_list = ThumbnailList()
     items = [ImageItem(path=Path(f"/tmp/img{i}.jpg")) for i in range(3)]
     thumbnail_list.set_items(items)
-    thumbnail_list.set_scores({items[i].path: 10 * i for i in range(3)})
+    thumbnail_list.set_scores({items[i].path: PhotoScores(quality=10 * i, blur=90) for i in range(3)})
 
     thumbnail_list.set_items(list(reversed(items)))
 
-    assert thumbnail_list.item(0).data(thumbnail_list_module._SCORE_ROLE) == 20
-    assert thumbnail_list.score_for(items[1]) == 10
+    assert thumbnail_list.item(0).data(thumbnail_list_module._SCORE_ROLE).quality == 20
+    assert thumbnail_list.score_for(items[1]).quality == 10
 
 
 def test_the_delegate_reserves_room_for_three_text_lines(qapp):
