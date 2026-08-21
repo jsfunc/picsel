@@ -986,3 +986,43 @@ def test_the_status_bar_reports_the_score_and_the_active_filter(main_window, tmp
     main_window.score_filter.setValue(50)
     message = main_window.statusBar().currentMessage()
     assert "Showing score >= 50" in message and "1 hidden" in message
+
+
+def test_sorting_by_score_before_any_scores_exist_still_takes_effect(main_window, tmp_path):
+    """Asking for score order on a folder that has not been scored yet used to
+    look like it had done nothing.
+
+    With no scores, every photo sits in the "unscored" bucket, so score order
+    is identical to filename order and nothing moves. Toggling the button off
+    again before the background pass finished then meant the order never
+    settled at all, so the button appeared permanently broken.
+    """
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=4)
+    main_window.open_folder(photos)
+    assert all(main_window.quality_ctl.score_for(i.path) is None for i in main_window.library.items)
+
+    main_window.sort_by_score_button.click()
+    assert main_window._sort_mode == "score"
+
+    # Scores land afterwards, as a background batch would deliver them.
+    _seed_scores(main_window, {0: 30, 1: 90, 2: 10, 3: 60})
+    main_window._on_scores_updated()
+
+    scores = [main_window.quality_ctl.score_for(i.path) for i in main_window.library.items]
+    assert scores == [90, 60, 30, 10]
+
+
+def test_choosing_score_order_while_scoring_says_why_nothing_moved(main_window, tmp_path):
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=2)
+    main_window.open_folder(photos)
+    main_window.quality_ctl._pending.append(object())  # pretend a batch is in flight
+    main_window.quality_ctl._done, main_window.quality_ctl._queued = 0, 2
+    try:
+        main_window._set_sort_mode("score")
+        assert "still scoring" in main_window.statusBar().currentMessage()
+    finally:
+        main_window.quality_ctl._pending.clear()

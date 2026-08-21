@@ -18,6 +18,13 @@ work landed, not necessarily when a version was tagged.
 
 ### Fixed
 
+- **Sorting by quality score appeared to do nothing on a folder that had not
+  been scored yet.** With no scores, every photo falls into the "unscored"
+  bucket, so score order is identical to filename order and nothing moves;
+  toggling the button off again before the background pass finished meant the
+  order never settled, making the button look permanently broken. The order
+  now fills in as each batch of results arrives, and choosing score order
+  while scoring is still running says so in the status bar.
 - **Quality scores were computed by the wrong model.** The scorer paired
   open_clip's `ViT-L-14` config with OpenAI's weights, which were trained
   with QuickGELU activations that config does not use — open_clip warns and

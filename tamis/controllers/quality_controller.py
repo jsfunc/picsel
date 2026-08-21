@@ -120,6 +120,17 @@ class QualityController(QObject):
         if not self._pending:
             self.save()
 
+    @property
+    def scoring_in_progress(self) -> bool:
+        """Whether a scoring pass still has batches outstanding. Lets the UI
+        explain why an order or a filter that depends on scores does not look
+        right yet, instead of appearing to have ignored the request."""
+        return bool(self._pending)
+
+    @property
+    def scoring_progress(self) -> tuple[int, int]:
+        return self._done, self._queued
+
     # -- Score access ----------------------------------------------------
 
     def score_for(self, path: Path) -> int | None:

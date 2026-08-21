@@ -319,7 +319,22 @@ class MainWindow(QMainWindow):
              for item in self.library.items
              if self.quality_ctl.score_for(item.path) is not None}
         )
+        # Re-sort as results arrive rather than only once the pass ends.
+        # Waiting made asking for score order on a folder that hadn't been
+        # scored yet look like it had done nothing at all: with no scores,
+        # every photo sits in the "unscored" bucket and score order is
+        # identical to filename order. Toggling off again before the pass
+        # finished then meant it never appeared to work.
+        if self._sort_mode == "score":
+            self._resort_by_score()
         self._update_status_bar()
+
+    def _resort_by_score(self) -> None:
+        if not self.library.items:
+            return
+        self.library.sort_items(key=self._sort_key("score"))
+        self.thumbnail_list.set_items(self.library.items)
+        self.thumbnail_list.select_index(self.library.current_index)
 
     def _on_scoring_failed(self, error: str) -> None:
         self.statusBar().showMessage(f"Quality scoring unavailable: {error}")
@@ -329,15 +344,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Scoring photo quality: {done}/{total}...")
             return
         if total:
-            # The pass is finished. Re-sort now rather than on every batch:
-            # reordering the strip while the user is looking at it, sixteen
-            # photos at a time, would be worse than a single settle at the end.
-            if self._sort_mode == "score" and self.library.items:
-                current = self.library.current_item
-                self.library.sort_items(key=self._sort_key("score"))
-                self.thumbnail_list.set_items(self.library.items)
-                if current is not None:
-                    self.thumbnail_list.select_index(self.library.current_index)
+            # Ordering is kept up to date by _on_scores_updated as each batch
+            # lands, so there is nothing to re-sort here.
             self._update_status_bar()
 
     # -- Menu / shortcuts --------------------------------------------------
@@ -774,6 +782,14 @@ class MainWindow(QMainWindow):
             self.thumbnail_list.set_items(self.library.items)
             self.thumbnail_list.select_index(self.library.current_index)
             self._update_status_bar()
+            if QUALITY_AVAILABLE and mode == "score" and self.quality_ctl.scoring_in_progress:
+                # Nothing will appear to move until scores exist, so say so
+                # rather than leaving the click looking ignored.
+                done, total = self.quality_ctl.scoring_progress
+                self.statusBar().showMessage(
+                    f"Sorting by quality score — still scoring ({done}/{total}); "
+                    "the order fills in as results arrive."
+                )
 
     # -- Marking ----------------------------------------------------
 
