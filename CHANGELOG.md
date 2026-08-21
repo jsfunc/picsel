@@ -6,6 +6,15 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+### Changed
+
+- The filmstrip is 7px shorter: the padding around each cell was trimmed to
+  what the contents actually need, giving the image that much more of the
+  window. The cell size now comes from one function shared by the grid and
+  the delegate, rather than the same formula written out twice — a mismatch
+  between those two does not fail loudly, it paints the filename on top of
+  the thumbnail.
+
 ## [2.4.0]
 
 ### Added

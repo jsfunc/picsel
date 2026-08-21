@@ -268,3 +268,30 @@ def test_signal_blocking_is_restored_after_a_rebuild(qapp):
     thumbnail_list.currentRowChanged.connect(seen.append)
     thumbnail_list.setCurrentRow(2)
     assert seen == [2]
+
+
+def test_the_grid_and_the_delegate_derive_the_cell_size_from_one_place(qapp):
+    # They used to compute it separately from the same formula, which is a
+    # standing invitation to change one and not the other -- and a mismatch
+    # paints the filename on top of the thumbnail rather than failing loudly.
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    thumbnail_list = ThumbnailList()
+    thumbnail_list.set_items([ImageItem(path=Path("/tmp/img0.jpg"))])
+    option = QStyleOptionViewItem()
+    option.font = thumbnail_list.font()
+
+    hint = thumbnail_list.itemDelegate().sizeHint(option, thumbnail_list.model().index(0, 0))
+    assert hint == thumbnail_list.gridSize()
+    assert hint == thumbnail_list_module._cell_size(thumbnail_list.font())
+
+
+def test_the_cell_is_no_taller_than_its_contents_need(qapp):
+    # The filmstrip competes with the image for window height, so the padding
+    # is deliberately tight.
+    from PySide6.QtGui import QFontMetrics
+
+    thumbnail_list = ThumbnailList()
+    line = QFontMetrics(thumbnail_list.font()).height()
+    content = ICON_SIZE.height() + 3 * line
+    assert thumbnail_list.gridSize().height() - content <= 6

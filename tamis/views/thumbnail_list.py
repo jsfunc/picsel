@@ -37,6 +37,29 @@ BADGE_DIAMETER = 22
 # them without reaching back into a controller during paint.
 _SCORE_ROLE = Qt.ItemDataRole.UserRole + 2
 
+# Vertical layout of one cell: padding, the icon, a gap, then three text lines
+# (filename, stars, scores). Kept tight, because the filmstrip competes with
+# the image for window height and the padding was doing nothing but consuming
+# it.
+_TEXT_LINES = 3
+_TOP_PADDING = 2
+_ICON_TEXT_GAP = 2
+_BOTTOM_PADDING = 1
+
+
+def _cell_size(font) -> QSize:
+    """The size of one filmstrip cell.
+
+    The single source of truth for both the delegate's sizeHint and the
+    widget's grid: when those two disagree the delegate lays text out in a
+    rect too short for it and the filename is painted over the thumbnail.
+    """
+    line = QFontMetrics(font).height()
+    return QSize(
+        ICON_SIZE.width() + 20,
+        _TOP_PADDING + ICON_SIZE.height() + _ICON_TEXT_GAP + _TEXT_LINES * line + _BOTTOM_PADDING,
+    )
+
 
 def _badged_pixmap(pixmap: QPixmap, status: Status) -> QPixmap:
     """A copy of `pixmap` with a small check/cross badge in the top-left
@@ -80,10 +103,9 @@ class _ThumbnailDelegate(QStyledItemDelegate):
         Required, not cosmetic: without it QStyledItemDelegate sizes the item
         for a single line of display text, so paint() lays out three lines in
         a rect too short for them and the filename lands on top of the
-        thumbnail. Must match ThumbnailList's grid size.
+        thumbnail.
         """
-        line = QFontMetrics(option.font).height()
-        return QSize(ICON_SIZE.width() + 20, ICON_SIZE.height() + 3 * line + 12)
+        return _cell_size(option.font)
 
     def paint(self, painter, option, index) -> None:
         self.initStyleOption(option, index)
@@ -100,15 +122,15 @@ class _ThumbnailDelegate(QStyledItemDelegate):
         metrics = QFontMetrics(option.font)
         line = metrics.height()
         rect = option.rect
-        # Three text lines are reserved at the bottom (name, stars, score);
-        # ThumbnailList sizes its grid to match, so these must stay in step.
-        text_top = rect.bottom() - 3 * line - 2
+        text_top = rect.y() + _TOP_PADDING + ICON_SIZE.height() + _ICON_TEXT_GAP
 
         icon = index.data(Qt.ItemDataRole.DecorationRole)
         if icon is not None:
             pixmap = icon.pixmap(ICON_SIZE)
+            # Centred within the icon band, so portrait and landscape
+            # thumbnails share a baseline.
             x = rect.x() + (rect.width() - pixmap.width()) // 2
-            y = rect.y() + max(2, (text_top - rect.y() - pixmap.height()) // 2)
+            y = rect.y() + _TOP_PADDING + (ICON_SIZE.height() - pixmap.height()) // 2
             painter.drawPixmap(x, y, pixmap)
 
         painter.setPen(
@@ -187,14 +209,10 @@ class ThumbnailList(QListWidget):
 
         self.setItemDelegate(_ThumbnailDelegate(self))
 
-        # Three text lines below the icon: filename, star rating, aesthetic
-        # score. _ThumbnailDelegate reserves exactly this much, so the two
-        # must stay in step.
-        line_height = QFontMetrics(self.font()).height()
-        item_size = QSize(ICON_SIZE.width() + 20, ICON_SIZE.height() + 3 * line_height + 12)
+        item_size = _cell_size(self.font())
         self.setGridSize(item_size)
         scrollbar_height = self.horizontalScrollBar().sizeHint().height()
-        self.setFixedHeight(item_size.height() + scrollbar_height + 2 * self.frameWidth() + 4)
+        self.setFixedHeight(item_size.height() + scrollbar_height + 2 * self.frameWidth() + 2)
 
         self._thread_pool = QThreadPool.globalInstance()
         self._pending_workers: list[ThumbnailWorker] = []
