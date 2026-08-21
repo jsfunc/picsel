@@ -6,6 +6,26 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Rank photos by quality score**, highest first — a button above the filter
+  slider beside the filmstrip, and a matching `View > Sort by Quality Score`.
+  Photos not yet scored sort last rather than as zero, since scoring runs in
+  the background and "not scored yet" is not "scored badly". The order
+  settles once when a scoring pass finishes rather than reshuffling every
+  sixteen photos.
+
+### Fixed
+
+- **Quality scores were computed by the wrong model.** The scorer paired
+  open_clip's `ViT-L-14` config with OpenAI's weights, which were trained
+  with QuickGELU activations that config does not use — open_clip warns and
+  proceeds, so it failed silently. Measured over 80 photos, the mismatch
+  shifted 75% of scores by more than 2 points out of 100 (Spearman 0.93
+  against the correct pairing). The sidecar now records which model produced
+  its scores and discards any written by a different one, so caches from
+  2.3.0 are recomputed rather than mixed with corrected values.
+
 ## [2.3.0]
 
 ### Added

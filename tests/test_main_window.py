@@ -818,9 +818,15 @@ def test_the_help_menu_offers_the_architecture_docs(main_window):
 
 
 def _seed_scores(main_window, scores: dict) -> None:
-    """Attach scores by index without running the model."""
-    by_path = {main_window.library.items[i].path: s for i, s in scores.items()}
-    main_window.thumbnail_list.set_scores(by_path)
+    """Attach quality scores by item index without running the model.
+
+    Fills both the store (which sorting reads) and the filmstrip (which
+    filtering reads), so a test can just say what each photo scored.
+    """
+    items = main_window.library.items
+    store = main_window.quality_ctl.store
+    store.set_many({items[i].name: s for i, s in scores.items()}, store.generation)
+    main_window.thumbnail_list.set_scores({items[i].path: s for i, s in scores.items()})
 
 
 def test_the_score_filter_hides_photos_without_touching_the_library(main_window, tmp_path):
@@ -888,3 +894,75 @@ def test_a_filter_hiding_everything_leaves_the_current_photo_alone(main_window, 
 
     assert main_window._nearest_visible_index(0) is None
     assert main_window.library.current_index == 0
+
+
+def test_sorting_by_score_puts_the_best_first_and_the_unscored_last(main_window, tmp_path):
+    # "Not scored yet" is not "scored badly": scoring runs in the background,
+    # so an unscored photo must not be sunk as if it had scored zero.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=4)
+    main_window.open_folder(photos)
+    _seed_scores(main_window, {0: 30, 1: 90, 3: 60})  # index 2 left unscored
+
+    main_window._set_sort_mode("score")
+
+    scores = [main_window.quality_ctl.score_for(i.path) for i in main_window.library.items]
+    assert scores[:3] == [90, 60, 30]
+    assert scores[3] is None
+
+
+def test_the_sort_button_and_the_view_menu_stay_in_sync(main_window, tmp_path):
+    # They are two faces of one choice, so picking either must update both.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=2)
+    main_window.open_folder(photos)
+
+    main_window.sort_by_score_button.click()
+    assert main_window._sort_mode == "score"
+    assert main_window.sort_by_score_action.isChecked()
+    assert main_window.sort_by_score_button.isChecked()
+
+    main_window.sort_by_name_action.trigger()
+    assert main_window._sort_mode == "name"
+    assert not main_window.sort_by_score_button.isChecked()
+
+
+def test_clicking_the_sort_button_again_keeps_score_order(main_window, tmp_path):
+    # It is checkable to show which ordering is active, not to toggle back to
+    # some "unsorted" state that does not exist.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=2)
+    main_window.open_folder(photos)
+
+    main_window.sort_by_score_button.click()
+    main_window.sort_by_score_button.click()
+
+    assert main_window._sort_mode == "score"
+    assert main_window.sort_by_score_button.isChecked()
+
+
+def test_the_quality_controls_are_one_thumbnail_tall(main_window):
+    # The button and slider share the height of a single filmstrip cell, so
+    # they line up with the strip they act on.
+    column = main_window.sort_by_score_button.parentWidget()
+    assert column.height() == main_window.thumbnail_list.gridSize().height()
+
+
+def test_the_status_bar_reports_the_score_and_the_active_filter(main_window, tmp_path):
+    # The slider has no numeric label of its own, so this is where the cutoff
+    # is visible while browsing.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    _make_photos(photos, count=3)
+    main_window.open_folder(photos)
+    _seed_scores(main_window, {0: 80, 1: 20, 2: 70})
+    main_window.library.current_index = 0
+    main_window._update_status_bar()
+    assert "Quality: 80" in main_window.statusBar().currentMessage()
+
+    main_window.score_filter.setValue(50)
+    message = main_window.statusBar().currentMessage()
+    assert "Showing score >= 50" in message and "1 hidden" in message

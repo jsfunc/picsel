@@ -31,6 +31,8 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
+from tamis.quality.store import MODEL_ID
+
 logger = logging.getLogger(__name__)
 
 # ViT-L/14 rather than the smaller ViT-B/32: B/32 is a 350MB download against
@@ -39,7 +41,17 @@ logger = logging.getLogger(__name__)
 # against L/14, which is a different opinion rather than a cheaper
 # approximation of the same one. L/14 is what was evaluated by eye, so it is
 # what ships. Switching is this constant plus the matching head below.
-CLIP_MODEL = "ViT-L-14"
+#
+# The "-quickgelu" suffix is load-bearing, not decoration. OpenAI's CLIP was
+# trained with QuickGELU activations, while open_clip's bare "ViT-L-14" config
+# defaults to standard GELU -- so pairing that config with
+# pretrained="openai" loads the right weights into the wrong architecture.
+# open_clip warns and carries on, so it fails silently. The result is not
+# noise but a consistently different model: Spearman 0.93 against the correct
+# pairing over 80 photos, with 75% of scores shifted by more than 2 points out
+# of 100. Any change here must also bump store.MODEL_ID, or cached scores from
+# the old pairing will be mixed in with new ones.
+CLIP_MODEL = "ViT-L-14-quickgelu"
 CLIP_PRETRAINED = "openai"
 
 # The "improved aesthetic predictor" MLP head (Apache-2.0), trained on AVA +
@@ -116,6 +128,13 @@ def _load() -> tuple:
         _head = head.eval().to(_device)
         logger.info("Aesthetic scorer ready on %s", _device)
     return _model, _preprocess, _head, _device
+
+
+def model_id() -> str:
+    """Identity of the scorer that produced a value, recorded in the sidecar
+    so cached scores from a different model are recomputed rather than mixed
+    with new ones. Kept in `store` so it can be read without importing torch."""
+    return MODEL_ID
 
 
 def to_display_score(raw: float) -> int:

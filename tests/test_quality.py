@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tamis.quality.store import QUALITY_FILENAME, QualityStore
+from tamis.quality.store import MODEL_ID, QUALITY_FILENAME, QualityStore
 
 
 def _store(tmp_path) -> QualityStore:
@@ -69,9 +69,12 @@ def test_an_unreadable_sidecar_is_reported_and_starts_empty(tmp_path):
 
 
 def test_out_of_range_and_malformed_entries_are_ignored(tmp_path):
-    # Read defensively so a hand-edited or older file still loads.
+    # Read defensively so a hand-edited file still loads.
     (tmp_path / QUALITY_FILENAME).write_text(
-        json.dumps({"ok.jpg": 55, "high.jpg": 150, "low.jpg": -3, "text.jpg": "nope"})
+        json.dumps({
+            "model": MODEL_ID,
+            "scores": {"ok.jpg": 55, "high.jpg": 150, "low.jpg": -3, "text.jpg": "nope"},
+        })
     )
     store = QualityStore()
     store.load(tmp_path)
@@ -110,3 +113,38 @@ def test_a_cancelled_batch_does_no_work():
 
     assert received == [({}, 1, "")]
     assert worker.cancelled
+
+
+def test_scores_from_a_different_model_are_discarded(tmp_path):
+    """Mixing models would order photos by two different opinions at once.
+
+    Not hypothetical: the first release of this feature paired open_clip's
+    "ViT-L-14" config with OpenAI weights, silently substituting standard GELU
+    for the QuickGELU those weights were trained with. Every score it wrote
+    came from a different model than the one now in use.
+    """
+    (tmp_path / QUALITY_FILENAME).write_text(
+        json.dumps({"model": "some-older-scorer", "scores": {"a.jpg": 55}})
+    )
+    store = QualityStore()
+    store.load(tmp_path)
+    assert store.get(tmp_path / "a.jpg") is None
+
+
+def test_a_sidecar_with_no_model_recorded_is_discarded(tmp_path):
+    # The very first format had no model field at all.
+    (tmp_path / QUALITY_FILENAME).write_text(json.dumps({"a.jpg": 55, "b.jpg": 70}))
+    store = QualityStore()
+    store.load(tmp_path)
+    assert store.get(tmp_path / "a.jpg") is None
+
+
+def test_the_recorded_model_id_names_the_model_actually_used(tmp_path):
+    # Guards against the two drifting apart, which is what would let stale
+    # scores survive a model change.
+    pytest.importorskip("torch")
+    from tamis.quality import scorer
+
+    assert scorer.CLIP_MODEL in MODEL_ID
+    assert scorer.model_id() == MODEL_ID
+    assert f"{scorer.RAW_MIN}-{scorer.RAW_MAX}" in MODEL_ID

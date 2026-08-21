@@ -19,6 +19,17 @@ logger = logging.getLogger(__name__)
 
 QUALITY_FILENAME = ".tamis_quality.json"
 
+# Which scorer produced the cached values. Recorded in the sidecar and checked
+# on load, so scores computed by a different model -- or a different raw->0-100
+# mapping -- are discarded and recomputed instead of being silently compared
+# against new ones. Bump this whenever scorer.CLIP_MODEL, CLIP_PRETRAINED, the
+# aesthetic head, or RAW_MIN/RAW_MAX change.
+#
+# v2: the first release paired open_clip's "ViT-L-14" config with OpenAI
+# weights, which silently substituted standard GELU for the QuickGELU those
+# weights were trained with; every score it wrote is from a different model.
+MODEL_ID = "clip-ViT-L-14-quickgelu-openai+laion-aesthetic-l14-mlp+range3.0-7.0"
+
 
 class QualityStore:
     def __init__(self) -> None:
@@ -51,9 +62,19 @@ class QualityStore:
         if not isinstance(data, dict):
             self.load_error = f"{path} is not in the expected format; scores will be recomputed."
             return
+        if data.get("model") != MODEL_ID:
+            # A different scorer wrote this, including any version that
+            # predates the model being recorded at all. Recomputing costs a
+            # background pass; keeping them would mean ordering photos by
+            # scores from two different models at once.
+            logger.info("Discarding %s: scored by %r, not %r", path, data.get("model"), MODEL_ID)
+            return
+        scores = data.get("scores")
+        if not isinstance(scores, dict):
+            return
         self._scores = {
             str(name): int(value)
-            for name, value in data.items()
+            for name, value in scores.items()
             if isinstance(value, (int, float)) and 0 <= value <= 100
         }
 
@@ -95,7 +116,7 @@ class QualityStore:
         and synchronous here, serialisation and disk I/O on a worker."""
         if self.folder is None or not self._scores:
             return None
-        return self._state_path(), dict(self._scores)
+        return self._state_path(), {"model": MODEL_ID, "scores": dict(self._scores)}
 
     @staticmethod
     def write_payload(path: Path, data: dict) -> None:

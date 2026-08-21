@@ -17,14 +17,14 @@ from PySide6.QtCore import Qt, QThreadPool, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
-    QHBoxLayout,
     QFileDialog,
-    QLabel,
+    QHBoxLayout,
     QMainWindow,
     QMessageBox,
     QSlider,
     QSplitter,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -223,11 +223,13 @@ class MainWindow(QMainWindow):
         self._update_status_bar()
 
     def _build_filmstrip_row(self) -> QWidget:
-        """The filmstrip, with the aesthetic-score filter slider to its left.
+        """The filmstrip, with the quality controls in a narrow column to its
+        left: a sort-by-score button above the filter slider.
 
-        Vertical and adjacent to the strip so the cutoff reads against the
-        scores printed under each thumbnail. Absent entirely when scoring
-        isn't installed, rather than shown doing nothing.
+        The column is exactly one thumbnail cell tall, so the controls line up
+        with the strip they act on and the slider's travel reads against the
+        scores printed under each photo. Absent entirely when scoring isn't
+        installed, rather than shown doing nothing.
         """
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -236,31 +238,56 @@ class MainWindow(QMainWindow):
 
         if QUALITY_AVAILABLE:
             column = QWidget()
+            # Matches a filmstrip item exactly (icon + filename + stars +
+            # score), so button and slider together occupy the height of one
+            # thumbnail rather than stretching with the widget.
+            column.setFixedHeight(self.thumbnail_list.gridSize().height())
             column_layout = QVBoxLayout(column)
-            column_layout.setContentsMargins(4, 2, 0, 2)
-            column_layout.setSpacing(1)
+            column_layout.setContentsMargins(3, 2, 0, 2)
+            column_layout.setSpacing(3)
 
-            self.score_filter_label = QLabel("0")
-            self.score_filter_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-            self.score_filter_label.setToolTip("Minimum aesthetic score shown")
+            self.sort_by_score_button = QToolButton()
+            self.sort_by_score_button.setText("\u2193")  # descending
+            self.sort_by_score_button.setCheckable(True)
+            self.sort_by_score_button.setToolTip("Rank photos by quality score, highest first")
+            self.sort_by_score_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self.sort_by_score_button.clicked.connect(self._on_sort_by_score_clicked)
 
             self.score_filter = QSlider(Qt.Orientation.Vertical)
             self.score_filter.setRange(0, 100)
             self.score_filter.setValue(0)
-            self.score_filter.setToolTip(
-                "Hide photos scoring below this. Nothing is deleted -- lower the slider to bring them back."
-            )
+            self.score_filter.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self._update_score_filter_tooltip(0)
             self.score_filter.valueChanged.connect(self._on_score_filter_changed)
 
-            column_layout.addWidget(self.score_filter_label)
-            column_layout.addWidget(self.score_filter, 1)
-            layout.addWidget(column)
+            column_layout.addWidget(self.sort_by_score_button, 0, Qt.AlignmentFlag.AlignHCenter)
+            column_layout.addWidget(self.score_filter, 1, Qt.AlignmentFlag.AlignHCenter)
+            layout.addWidget(column, 0, Qt.AlignmentFlag.AlignTop)
 
         layout.addWidget(self.thumbnail_list, 1)
         return row
 
+    def _on_sort_by_score_clicked(self) -> None:
+        """Clicking always selects score order rather than toggling it off.
+
+        The button is checkable only to show which ordering is active; there
+        is no "unsorted" state to return to, so a second click would have to
+        invent one. Use the View menu to pick a different order, which
+        unchecks this.
+        """
+        self.sort_by_score_button.setChecked(True)
+        self._set_sort_mode("score")
+
+    def _update_score_filter_tooltip(self, value: int) -> None:
+        self.score_filter.setToolTip(
+            f"Showing photos scoring {value} or above.\n"
+            "Nothing is deleted -- lower this to bring them back."
+            if value
+            else "Hide photos below a quality score.\nNothing is deleted -- lower this to bring them back."
+        )
+
     def _on_score_filter_changed(self, value: int) -> None:
-        self.score_filter_label.setText(str(value))
+        self._update_score_filter_tooltip(value)
         self.thumbnail_list.set_min_score(value)
         # The photo on screen may have just been filtered out; move to the
         # nearest one still visible rather than leaving the viewer showing
@@ -297,8 +324,17 @@ class MainWindow(QMainWindow):
     def _on_scoring_progress(self, done: int, total: int) -> None:
         if total and done < total:
             self.statusBar().showMessage(f"Scoring photo quality: {done}/{total}...")
-        elif total:
-            self.statusBar().showMessage(f"Scored {total} photo(s).")
+            return
+        if total:
+            # The pass is finished. Re-sort now rather than on every batch:
+            # reordering the strip while the user is looking at it, sixteen
+            # photos at a time, would be worse than a single settle at the end.
+            if self._sort_mode == "score" and self.library.items:
+                current = self.library.current_item
+                self.library.sort_items(key=self._sort_key("score"))
+                self.thumbnail_list.set_items(self.library.items)
+                if current is not None:
+                    self.thumbnail_list.select_index(self.library.current_index)
             self._update_status_bar()
 
     # -- Menu / shortcuts --------------------------------------------------
@@ -360,6 +396,13 @@ class MainWindow(QMainWindow):
         self.sort_by_stars_action.triggered.connect(lambda: self._set_sort_mode("stars"))
         sort_group.addAction(self.sort_by_stars_action)
         view_menu.addAction(self.sort_by_stars_action)
+
+        if QUALITY_AVAILABLE:
+            self.sort_by_score_action = QAction("Sort by Quality Score", self)
+            self.sort_by_score_action.setCheckable(True)
+            self.sort_by_score_action.triggered.connect(lambda: self._set_sort_mode("score"))
+            sort_group.addAction(self.sort_by_score_action)
+            view_menu.addAction(self.sort_by_score_action)
 
         help_menu = self.menuBar().addMenu("&Help")
         shortcuts_action = QAction("Keyboard Shortcuts", self)
@@ -650,6 +693,17 @@ class MainWindow(QMainWindow):
             f"{item.name}  |  {position}  |  Status: {item.status.value}  |  Rating: {rating}"
             f"  |  Selected: {counts['selected']}  Rejected: {counts['rejected']}  Unrated: {counts['unrated']}"
         )
+        if QUALITY_AVAILABLE:
+            score = self.quality_ctl.score_for(item.path)
+            if score is not None:
+                message += f"  |  Quality: {score}"
+            # The slider has no numeric label of its own -- it and the sort
+            # button share one thumbnail's height -- so the active cutoff is
+            # reported here, where it stays visible while browsing.
+            minimum = self.thumbnail_list.min_score()
+            if minimum:
+                hidden = sum(1 for i in self.library.items if self.thumbnail_list.is_filtered_out(i))
+                message += f"  |  Showing score >= {minimum} ({hidden} hidden)"
         self.statusBar().showMessage(message)
 
     # -- Sorting ----------------------------------------------------
@@ -674,7 +728,23 @@ class MainWindow(QMainWindow):
         if mode == "stars":
             # Highest rating first; break ties by capture time (earliest first).
             return lambda item: (-item.rating, self._capture_time(item))
+        if mode == "score":
+            return self._score_sort_key
         return lambda item: item.path
+
+    def _score_sort_key(self, item):
+        """Highest quality score first, unscored photos last.
+
+        Unscored is deliberately not treated as zero: scoring runs in the
+        background, so "not scored yet" is a different thing from "scored
+        badly", and sinking a photo to the bottom for the former would
+        reorder the folder again the moment its score arrived. The leading
+        bucket keeps them apart; path breaks ties so the order is stable.
+        """
+        score = self.quality_ctl.score_for(item.path) if QUALITY_AVAILABLE else None
+        if score is None:
+            return (1, 0, item.path)
+        return (0, -score, item.path)
 
     def _set_sort_mode(self, mode: str) -> None:
         if mode == self._sort_mode:
@@ -689,7 +759,13 @@ class MainWindow(QMainWindow):
             "date": self.sort_by_date_action,
             "stars": self.sort_by_stars_action,
         }
+        if QUALITY_AVAILABLE:
+            sort_actions["score"] = self.sort_by_score_action
         sort_actions[mode].setChecked(True)
+        if QUALITY_AVAILABLE:
+            # The filmstrip button is a second face of the same choice, so it
+            # has to follow a change made from the View menu too.
+            self.sort_by_score_button.setChecked(mode == "score")
         if self.library.items:
             self.library.sort_items(key=self._sort_key(mode))
             self.thumbnail_list.set_items(self.library.items)
