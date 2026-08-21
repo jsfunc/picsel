@@ -6,6 +6,17 @@ work landed, not necessarily when a version was tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Zoom now carries over to the next photo, and `Z` toggles 1:1.** Judging
+  focus needs 1:1 — a 4000px photo fits the window at 18%, five image pixels
+  per screen pixel, where a missed focus and a sharp shot look identical. But
+  every navigation reset the view to fit, so comparing the same detail across
+  a burst meant re-zooming and re-panning on every frame. The zoom level and
+  position now persist, positioned by *relative* location so the next photo
+  can be a different size or orientation. Zoom controls also appear in the
+  keyboard shortcuts dialog, where they were previously undocumented.
+
 ## [2.3.2]
 
 ### Added

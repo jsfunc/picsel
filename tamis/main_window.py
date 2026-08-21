@@ -78,6 +78,13 @@ Navigation
   Right / D       Next image
   Left  / A       Previous image
 
+Zoom
+  Z               Toggle 1:1 (actual pixels) / fit to window
+  Mouse wheel     Zoom in/out
+  Double-click    Fit to window
+  (zoom and position carry over to the next photo, so you can
+   compare focus across a burst at the same point)
+
 Culling
   S / Up          Mark Selected
   X / Down        Mark Rejected
@@ -454,6 +461,8 @@ class MainWindow(QMainWindow):
         for rating in range(1, 6):
             add(str(rating), lambda r=rating: self._set_rating(r))
         add("0", lambda: self._set_rating(0))
+
+        add("Z", self.viewer.toggle_actual_size)
 
         add("E", lambda: self.side_tabs.setCurrentWidget(self.edit_panel))
         add("M", lambda: self.side_tabs.setCurrentWidget(self.metadata_panel))

@@ -148,15 +148,21 @@ def test_resize_still_refits_when_the_user_has_not_zoomed(qapp):
     assert viewer._user_zoomed is False
 
 
-def test_set_image_resets_the_manual_zoom_flag(qapp):
+def test_a_manual_zoom_survives_navigating_to_the_next_photo(qapp):
+    # This used to reset. Culling means comparing the same detail across a
+    # burst, which is impossible if every navigation returns to fit and you
+    # have to re-zoom and re-pan for each frame.
     viewer = ImageViewer()
     viewer.resize(300, 200)
     viewer.set_image(_make_qimage())
     viewer.wheelEvent(_wheel_event())
     assert viewer._user_zoomed is True
+    zoomed = viewer.transform().m11()
 
     viewer.set_image(_make_qimage())  # e.g. navigating to the next photo
-    assert viewer._user_zoomed is False
+
+    assert viewer._user_zoomed is True
+    assert abs(viewer.transform().m11() - zoomed) < 1e-6
 
 
 def test_double_click_resets_zoom_to_fit(qapp):
@@ -171,3 +177,99 @@ def test_double_click_resets_zoom_to_fit(qapp):
     viewer.mouseDoubleClickEvent(_double_click_event())
     assert viewer._user_zoomed is False
     assert viewer.transform() == fitted_transform
+
+
+def _viewer(qapp, w: int = 400, h: int = 300) -> ImageViewer:
+    viewer = ImageViewer()
+    viewer.resize(320, 240)
+    viewer.set_image(_make_qimage(w, h))
+    return viewer
+
+
+def _relative_center(viewer: ImageViewer) -> tuple[float, float]:
+    pixmap = viewer._pixmap_item.pixmap()
+    center = viewer.mapToScene(viewer.viewport().rect().center())
+    return center.x() / pixmap.width(), center.y() / pixmap.height()
+
+
+def test_a_new_photo_fits_the_window_when_the_user_has_not_zoomed(qapp):
+    viewer = _viewer(qapp)
+    fitted = viewer.transform().m11()
+    viewer.set_image(_make_qimage(800, 600))
+    # Refitted for the new size rather than carrying the old scale over.
+    assert viewer.transform().m11() != fitted
+    assert not viewer._user_zoomed
+
+
+def test_zoom_carries_over_to_the_next_photo(qapp):
+    """The whole point of zooming while culling is comparing the same detail
+    across a burst. Resetting to fit on every navigation made that impossible:
+    you had to re-zoom and re-pan for every frame."""
+    viewer = _viewer(qapp)
+    viewer.toggle_actual_size()
+    assert viewer.is_actual_size()
+
+    viewer.set_image(_make_qimage(400, 300))
+
+    assert viewer.is_actual_size()
+    assert viewer._user_zoomed
+
+
+def test_the_relative_position_is_kept_across_a_different_shaped_photo(qapp):
+    # Relative, not absolute: the next photo may be a different size or
+    # orientation, and the same pixel coordinates could fall outside it.
+    # Images much larger than the viewport, so there is room to pan: Qt clamps
+    # centerOn to keep the viewport inside the scene, and a barely-oversized
+    # image cannot be positioned freely enough to test this.
+    viewer = _viewer(qapp, 2000, 1500)
+    viewer.toggle_actual_size()
+    pixmap = viewer._pixmap_item.pixmap()
+    viewer.centerOn(pixmap.width() * 0.25, pixmap.height() * 0.75)
+    before = _relative_center(viewer)
+
+    viewer.set_image(_make_qimage(1500, 2000))  # portrait instead of landscape
+
+    after = _relative_center(viewer)
+    assert abs(after[0] - before[0]) < 0.02
+    assert abs(after[1] - before[1]) < 0.02
+
+
+def test_a_centre_panned_outside_the_image_is_clamped(qapp):
+    # Panning can leave the viewport centre off the image; carrying that over
+    # would open the next photo showing empty space.
+    viewer = _viewer(qapp)
+    viewer.toggle_actual_size()
+    viewer.centerOn(-5000, -5000)
+
+    viewer.set_image(_make_qimage(400, 300))
+
+    x, y = _relative_center(viewer)
+    assert 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0
+
+
+def test_toggling_actual_size_returns_to_fit(qapp):
+    viewer = _viewer(qapp)
+    fitted = viewer.transform().m11()
+
+    viewer.toggle_actual_size()
+    assert viewer.is_actual_size()
+
+    viewer.toggle_actual_size()
+    assert abs(viewer.transform().m11() - fitted) < 1e-6
+    assert not viewer._user_zoomed
+
+
+def test_zoom_controls_do_nothing_without_an_image(qapp):
+    viewer = ImageViewer()
+    viewer.toggle_actual_size()  # must not raise
+    viewer.set_image(QImage())
+    assert not viewer._user_zoomed
+
+
+def test_the_shortcuts_dialog_documents_zoom():
+    # It was entirely undiscoverable: wheel-zoom and double-click-to-fit
+    # existed but appeared nowhere in the app.
+    import tamis.main_window as mw_module
+
+    assert "Zoom" in mw_module.SHORTCUTS_TEXT
+    assert "1:1" in mw_module.SHORTCUTS_TEXT

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
     QGraphicsRectItem,
@@ -120,18 +120,80 @@ class ImageViewer(QGraphicsView):
 
     def set_image(self, image: QImage | QPixmap) -> None:
         pixmap = QPixmap.fromImage(image) if isinstance(image, QImage) else image
+        # Capture where the user was looking *before* the pixmap changes.
+        anchor = self._viewport_anchor() if self._user_zoomed else None
+
         self._crop_drawer.clear()
         self._face_drawer.clear()
         self.set_face_boxes([])  # a new image's face boxes haven't been (re)computed yet
         self._pixmap_item.setPixmap(pixmap)
         self._scene.setSceneRect(self._pixmap_item.boundingRect())
-        self._user_zoomed = False
-        self.fit_to_window()
+
+        if anchor is None or pixmap.isNull():
+            self._user_zoomed = False
+            self.fit_to_window()
+        else:
+            self._restore_viewport(anchor)
+
+    def _viewport_anchor(self) -> tuple[float, float, float] | None:
+        """Where the viewport is looking, as (scale, x, y) with x/y as
+        fractions of the image -- so it can be re-applied to a photo of any
+        size or orientation.
+
+        The scale is kept in absolute terms rather than relative to
+        fit-to-window: at 1:1 the point is to see one image pixel per screen
+        pixel, and that has to stay true when the next photo has a different
+        resolution.
+        """
+        pixmap = self._pixmap_item.pixmap()
+        if pixmap.isNull():
+            return None
+        center = self.mapToScene(self.viewport().rect().center())
+        return (
+            self.transform().m11(),
+            center.x() / pixmap.width(),
+            center.y() / pixmap.height(),
+        )
+
+    def _restore_viewport(self, anchor: tuple[float, float, float]) -> None:
+        scale, relative_x, relative_y = anchor
+        pixmap = self._pixmap_item.pixmap()
+        self.setTransform(QTransform().scale(scale, scale))
+        # Clamped, because panning can leave the centre outside the image --
+        # carrying that over would open the next photo showing empty space.
+        self.centerOn(
+            min(max(relative_x, 0.0), 1.0) * pixmap.width(),
+            min(max(relative_y, 0.0), 1.0) * pixmap.height(),
+        )
 
     def fit_to_window(self) -> None:
         if self._pixmap_item.pixmap().isNull():
             return
         self.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def is_actual_size(self) -> bool:
+        """Whether the view is at 1:1. Compared with a tolerance because the
+        transform accumulates rounding from repeated wheel steps."""
+        return abs(self.transform().m11() - 1.0) < 0.01
+
+    def toggle_actual_size(self) -> None:
+        """Switch between 1:1 and fit-to-window, keeping the centre.
+
+        1:1 is the only zoom at which focus can be judged -- anything less
+        resamples the image and hides softness. One key rather than two
+        because these are the only two zoom levels worth landing on exactly;
+        anything in between is what the wheel is for.
+        """
+        if self._pixmap_item.pixmap().isNull():
+            return
+        if self.is_actual_size():
+            self._user_zoomed = False
+            self.fit_to_window()
+            return
+        center = self.mapToScene(self.viewport().rect().center())
+        self.setTransform(QTransform())  # identity == one image pixel per screen pixel
+        self._user_zoomed = True
+        self.centerOn(center)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
